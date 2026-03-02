@@ -8,6 +8,7 @@ import {
   Settings,
   Plus,
   Trash2,
+  Pencil,
   CheckCircle2,
   Clock,
   User,
@@ -27,11 +28,15 @@ import {
   Users,
   Store,
   TrendingUp,
+  TrendingDown,
   Activity,
+  DollarSign,
   MapPin,
   Lock,
   Navigation,
-  StopCircle
+  StopCircle,
+  MessageCircle,
+  Send
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -73,6 +78,7 @@ interface Product {
   ingredients: string;
   category: 'churrasco' | 'ready';
   image_url?: string;
+  promotional_price?: number | null;
 }
 
 interface ExtraIngredient {
@@ -84,10 +90,7 @@ interface ExtraIngredient {
 interface OrderItem {
   id: number;
   name: string;
-  price: number;
-  quantity: number;
-  ingredients?: string;
-  removedIngredients?: string[];
+  basePrice: number;
   extraIngredients?: ExtraIngredient[];
 }
 
@@ -196,6 +199,7 @@ const Navbar = () => {
     { path: "/kitchen", icon: ChefHat, label: "Cozinha", roles: ['admin', 'super_admin'] },
     { path: "/delivery", icon: Truck, label: "Entrega", roles: ['admin', 'super_admin'] },
     { path: "/admin", icon: Settings, label: "Admin", roles: ['admin', 'super_admin'] },
+    { path: "/finance", icon: DollarSign, label: "Caixa", roles: ['admin', 'super_admin'] },
     { path: "/saas-admin", icon: Activity, label: "SaaS", roles: ['super_admin'] },
     { path: "/super-admin", icon: Lock, label: "Super", roles: ['super_admin'] },
     { path: "/profile", icon: User, label: "Perfil", roles: ['user', 'admin', 'super_admin'] },
@@ -237,6 +241,131 @@ const Navbar = () => {
         );
       })}
     </nav>
+  );
+};
+
+const AIAssistant = () => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, isOpen]);
+
+  const sendMessage = async () => {
+    if (!input.trim() || isLoading) return;
+
+    const userMsg = { role: 'user' as const, content: input.trim() };
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newMessages })
+      });
+      const data = await res.json();
+      if (data.text) {
+        setMessages([...newMessages, { role: 'assistant', content: data.text }]);
+      } else {
+        setMessages([...newMessages, { role: 'assistant', content: "Ops, tive um probleminha aqui! Pode tentar de novo? 😅" }]);
+      }
+    } catch (err) {
+      setMessages([...newMessages, { role: 'assistant', content: "Tô com dificuldade de conexão, me chama daqui a pouco! 🍖" }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="fixed bottom-24 md:bottom-8 right-8 w-16 h-16 bg-orange-600 text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-50 border-4 border-white"
+        aria-label="Assistente de IA"
+      >
+        <div className="relative">
+          <MessageCircle size={32} />
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white rounded-full animate-pulse" />
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="fixed bottom-44 md:bottom-28 right-8 w-[90vw] md:w-96 h-[500px] bg-white rounded-3xl shadow-2xl z-50 flex flex-col overflow-hidden border border-slate-100 animate-in slide-in-from-bottom-8 duration-300">
+          <div className="bg-gradient-to-r from-orange-600 to-orange-500 p-4 flex items-center justify-between text-white">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
+                <UtensilsCrossed size={20} />
+              </div>
+              <div>
+                <p className="font-black text-sm uppercase tracking-tighter">Fale com a Paty</p>
+                <p className="text-[10px] text-orange-200 uppercase font-bold tracking-widest">Especialista em Churrasco</p>
+              </div>
+            </div>
+            <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-colors">
+              <X size={20} />
+            </button>
+          </div>
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
+            {messages.length === 0 && (
+              <div className="text-center py-8 text-slate-400">
+                <p className="text-sm font-medium">Olá! Eu sou a Paty. ✨<br />Diz aí, o que você tá querendo comer hoje?</p>
+              </div>
+            )}
+            {messages.map((msg, i) => (
+              <div key={i} className={cn("flex", msg.role === 'user' ? "justify-end" : "justify-start")}>
+                <div className={cn(
+                  "max-w-[80%] p-3 rounded-2xl text-sm font-medium shadow-sm",
+                  msg.role === 'user'
+                    ? "bg-orange-600 text-white rounded-tr-none"
+                    : "bg-white text-slate-700 border border-slate-100 rounded-tl-none"
+                )}>
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-white p-3 rounded-2xl rounded-tl-none border border-slate-100 flex gap-1">
+                  <div className="w-1.5 h-1.5 bg-slate-200 rounded-full animate-bounce" />
+                  <div className="w-1.5 h-1.5 bg-slate-200 rounded-full animate-bounce delay-75" />
+                  <div className="w-1.5 h-1.5 bg-slate-200 rounded-full animate-bounce delay-150" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="p-4 border-t border-slate-100 bg-white">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendMessage()}
+                placeholder="Pergunte sobre os lanches..."
+                className="flex-1 bg-slate-100 border-none rounded-2xl px-4 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+              />
+              <button
+                onClick={sendMessage}
+                disabled={isLoading || !input.trim()}
+                className="p-2 bg-orange-600 text-white rounded-2xl disabled:opacity-50 hover:bg-orange-700 transition-colors"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };
 
@@ -314,14 +443,17 @@ const AppInner = () => {
           <Route path="/kitchen" element={<KitchenPage />} />
           <Route path="/delivery" element={<DeliveryPage />} />
           <Route path="/admin" element={<AdminPage />} />
+          <Route path="/finance" element={<FinancePage />} />
           <Route path="/saas-admin" element={<SaaSAdminPage />} />
           <Route path="/super-admin" element={<SuperAdminPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/courier" element={<CourierPage />} />
           <Route path="/venda" element={<SaaSLandingPage />} />
           <Route path="/venda/cadastro" element={<SaaSStoreRegister />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
         </Routes>
+        <AIAssistant />
       </main>
     </div>
   );
@@ -387,10 +519,14 @@ const SalesPage = () => {
   const [tempIngredients, setTempIngredients] = useState<string[]>([]);
   const [availableExtras, setAvailableExtras] = useState<ExtraIngredient[]>([]);
   const [selectedExtras, setSelectedExtras] = useState<ExtraIngredient[]>([]);
+  const [paymentMethod, setPaymentMethod] = useState<'pix' | 'delivery'>('pix');
 
   // Payment Modal State
   const [showPayment, setShowPayment] = useState(false);
   const [lastOrder, setLastOrder] = useState<Order | null>(null);
+  const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [pixCopied, setPixCopied] = useState(false);
 
   const [useReward, setUseReward] = useState(false);
 
@@ -463,12 +599,14 @@ const SalesPage = () => {
     const removedIngredients = allIngredients.filter(i => !selectedIngredients.includes(i));
 
     const extrasPrice = extras.reduce((acc, extra) => acc + extra.price, 0);
-    const finalPrice = product.price + extrasPrice;
+    const basePrice = product.promotional_price != null ? Number(product.promotional_price) : product.price;
+    const finalPrice = basePrice + extrasPrice;
 
     setCart(prev => {
-      // We check for exact same product with exact same removed ingredients and exact same extras to group them
+      // Grouping logic: check for exact same product, base settings, and extras
       const existingIndex = prev.findIndex(item =>
         item.id === product.id &&
+        item.basePrice === basePrice &&
         JSON.stringify(item.removedIngredients?.sort()) === JSON.stringify(removedIngredients.sort()) &&
         JSON.stringify(item.extraIngredients?.map(e => e.id).sort()) === JSON.stringify(extras.map(e => e.id).sort())
       );
@@ -486,6 +624,7 @@ const SalesPage = () => {
         id: product.id,
         name: product.name,
         price: finalPrice,
+        basePrice: basePrice,
         quantity: 1,
         ingredients: ingredientsStr,
         removedIngredients: removedIngredients.length > 0 ? removedIngredients : undefined,
@@ -495,8 +634,8 @@ const SalesPage = () => {
     setSelectedProduct(null);
   };
 
-  const removeFromCart = (id: number) => {
-    setCart(prev => prev.filter(item => item.id !== id));
+  const removeFromCart = (index: number) => {
+    setCart(prev => prev.filter((_, i) => i !== index));
   };
 
   const subtotal = cart.reduce((acc, item) => acc + (item.price * item.quantity), 0);
@@ -538,7 +677,8 @@ const SalesPage = () => {
           use_reward: useReward,
           address: user.address,
           latitude: user.latitude,
-          longitude: user.longitude
+          longitude: user.longitude,
+          payment_method: paymentMethod
         })
       });
       if (res.status === 401) {
@@ -546,7 +686,6 @@ const SalesPage = () => {
         navigate("/login");
         throw new Error("Sua sessão expirou. Por favor, faça login novamente.");
       }
-
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.error || "Erro ao criar pedido");
@@ -555,7 +694,42 @@ const SalesPage = () => {
       setLastOrder(data);
       setCart([]);
       setUseReward(false);
+
+      if (paymentMethod === 'delivery') {
+        setIsOrdering(false);
+        alert("Pedido realizado com sucesso! O pagamento será feito na entrega.");
+        return;
+      }
+
       setShowPayment(true);
+
+      // Generate Pix QR Code automatically
+      setPixLoading(true);
+      try {
+        const pixRes = await fetch(`/api/${org?.id}/pix/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            total_price: total,
+            order_id: data.id,
+            description: `Pedido #${data.id}`
+          })
+        });
+        if (pixRes.ok) {
+          const pixJson = await pixRes.json();
+          setPixData(pixJson);
+          // Save mp_payment_id to the order
+          await fetch(`/api/orders/${data.id}/payment`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mp_payment_id: pixJson.payment_id?.toString() })
+          });
+        }
+      } catch (pixErr) {
+        console.warn("Pix não disponível, modo manual ativado");
+      } finally {
+        setPixLoading(false);
+      }
     } catch (err: any) {
       console.error(err);
       alert(err.message || "Erro ao finalizar pedido. Tente novamente.");
@@ -573,9 +747,18 @@ const SalesPage = () => {
         body: JSON.stringify({ payment_status: 'paid' })
       });
       setShowPayment(false);
-      alert("Pagamento confirmado! Seu pedido já está na cozinha.");
+      setPixData(null);
+      alert("Pagamento confirmado! Seu pedido já está na cozinha. 🍢");
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const copyPixCode = () => {
+    if (pixData?.qr_code) {
+      navigator.clipboard.writeText(pixData.qr_code);
+      setPixCopied(true);
+      setTimeout(() => setPixCopied(false), 3000);
     }
   };
 
@@ -594,6 +777,15 @@ const SalesPage = () => {
             <span className="text-gradient">{org?.name || "Premium Store"}</span>
           </h1>
           <p className="text-slate-500 mt-2 font-medium tracking-wide">Bem-vindo ao melhor sabor da região!</p>
+          <div className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-3 py-1">
+              <UtensilsCrossed size={10} className="text-orange-400" />
+              <span className="text-[10px] text-gray-400 font-semibold tracking-wide">Powered by <span className="text-orange-500">MenuFast</span></span>
+              <span className="text-gray-300 text-[10px]">•</span>
+              <Phone size={9} className="text-gray-400" />
+              <span className="text-[10px] text-gray-400">(62) 99999‑0001</span>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -615,31 +807,51 @@ const SalesPage = () => {
                       key={product.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group overflow-hidden"
+                      className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group overflow-hidden flex flex-col"
                     >
                       {product.image_url && (
-                        <div className="w-full h-40 mb-4 rounded-2xl overflow-hidden bg-gray-50">
+                        <div className="w-full h-40 mb-4 rounded-2xl overflow-hidden bg-gray-50 relative">
                           <img
                             src={product.image_url}
                             alt={product.name}
                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                             referrerPolicy="no-referrer"
                           />
+                          {(product as any).promotional_price != null && (
+                            <div className="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-wide shadow-lg flex items-center gap-1">
+                              🔥 PROMOÇÃO
+                            </div>
+                          )}
                         </div>
                       )}
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <h3 className="font-bold text-lg group-hover:text-orange-600 transition-colors">{product.name}</h3>
+                      {!(product as any).promotional_price && !product.image_url && null}
+                      {(product as any).promotional_price != null && !product.image_url && (
+                        <div className="mb-2">
+                          <span className="bg-red-100 text-red-600 text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-wide">🔥 Promoção</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-lg leading-tight group-hover:text-orange-600 transition-colors break-words">{product.name}</h3>
                           <p className="text-sm text-gray-500 line-clamp-2 mt-1">{product.description}</p>
                           {product.category === 'churrasco' && product.ingredients && (
                             <p className="text-[10px] text-gray-400 mt-2 font-medium uppercase tracking-wider">Ingredientes: {product.ingredients}</p>
                           )}
                         </div>
-                        <span className="font-mono font-bold text-lg text-orange-600 ml-4">R$ {product.price.toFixed(2)}</span>
+                        <div className="text-right shrink-0">
+                          {(product as any).promotional_price != null ? (
+                            <>
+                              <span className="block font-mono font-black text-lg text-red-600">R$ {Number((product as any).promotional_price).toFixed(2)}</span>
+                              <span className="block font-mono text-xs text-gray-400 line-through">R$ {product.price.toFixed(2)}</span>
+                            </>
+                          ) : (
+                            <span className="font-mono font-bold text-lg text-orange-600">R$ {product.price.toFixed(2)}</span>
+                          )}
+                        </div>
                       </div>
                       <button
                         onClick={() => handleAddClick(product)}
-                        className="mt-6 w-full bg-[var(--primary)] text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--secondary)] shadow-xl shadow-[var(--primary)]/20 transition-all active:scale-95"
+                        className="mt-auto mt-6 w-full bg-[var(--primary)] text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--secondary)] shadow-xl shadow-[var(--primary)]/20 transition-all active:scale-95"
                       >
                         <Plus size={20} strokeWidth={3} /> Adicionar
                       </button>
@@ -701,14 +913,14 @@ const SalesPage = () => {
             <div className="space-y-4 mb-6">
               {cart.map((item, index) => (
                 <div key={index} className="flex flex-col gap-1 border-b border-gray-50 pb-2 last:border-0">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold">{item.quantity}x</span>
-                      <span className="font-medium">{item.name}</span>
+                  <div className="flex justify-between items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-xs font-bold shrink-0">{item.quantity}x</span>
+                      <span className="font-medium break-words leading-tight">{item.name}</span>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-sm">R$ {(item.price * item.quantity).toFixed(2)}</span>
-                      <button onClick={() => removeFromCart(item.id)} className="text-red-400 hover:text-red-600">
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="font-mono text-sm text-gray-400 whitespace-nowrap">R$ {item.basePrice.toFixed(2)}</span>
+                      <button onClick={() => removeFromCart(index)} className="text-red-400 hover:text-red-600 p-1 hover:bg-red-50 rounded-lg transition-colors">
                         <X size={16} />
                       </button>
                     </div>
@@ -719,9 +931,14 @@ const SalesPage = () => {
                     </p>
                   )}
                   {item.extraIngredients && item.extraIngredients.length > 0 && (
-                    <p className="text-[10px] text-green-600 font-medium ml-8">
-                      Extra: {item.extraIngredients.map(e => e.name).join(', ')}
-                    </p>
+                    <div className="ml-8 mt-1 space-y-0.5">
+                      {item.extraIngredients.map((e, idx) => (
+                        <p key={idx} className="text-[10px] text-green-600 font-medium flex justify-between pr-8">
+                          <span>+ {e.name}</span>
+                          <span>R$ {e.price.toFixed(2)}</span>
+                        </p>
+                      ))}
+                    </div>
                   )}
                 </div>
               ))}
@@ -748,6 +965,29 @@ const SalesPage = () => {
               </div>
             )}
 
+            <div className="flex bg-gray-100 p-1 rounded-2xl mb-4">
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('pix')}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                  paymentMethod === 'pix' ? "bg-white text-green-600 shadow-sm" : "text-gray-400"
+                )}
+              >
+                <QrCode size={16} /> PIX
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('delivery')}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                  paymentMethod === 'delivery' ? "bg-white text-blue-600 shadow-sm" : "text-gray-400"
+                )}
+              >
+                <Truck size={16} /> Na Entrega
+              </button>
+            </div>
+
             <button
               disabled={isOrdering || cart.length === 0}
               onClick={placeOrder}
@@ -771,8 +1011,8 @@ const SalesPage = () => {
               className="bg-white w-full max-w-md rounded-3xl overflow-hidden shadow-2xl"
             >
               <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <div>
-                  <h3 className="text-xl font-bold">{selectedProduct.name}</h3>
+                <div className="min-w-0 pr-4">
+                  <h3 className="text-xl font-bold break-words leading-tight">{selectedProduct.name}</h3>
                   <p className="text-sm text-gray-500">Personalize seu pedido</p>
                 </div>
                 <button onClick={() => setSelectedProduct(null)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
@@ -856,18 +1096,18 @@ const SalesPage = () => {
                 )}
               </div>
 
-              <div className="p-6 bg-gray-50 flex gap-3 border-t border-gray-100">
+              <div className="p-4 sm:p-6 bg-gray-50 flex flex-wrap sm:flex-nowrap gap-3 border-t border-gray-100">
                 <button
                   onClick={() => setSelectedProduct(null)}
-                  className="flex-1 py-3 font-bold text-gray-500 hover:text-gray-700 transition-colors"
+                  className="flex-1 py-3 font-bold text-gray-500 hover:text-gray-700 transition-colors text-sm sm:text-base"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={() => addToCart(selectedProduct, tempIngredients, selectedExtras)}
-                  className="flex-[2] bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 shadow-lg shadow-orange-200 transition-all flex items-center justify-center gap-2"
+                  className="flex-[2] min-w-[180px] bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 shadow-lg shadow-orange-200 transition-all flex items-center justify-center gap-2 text-sm sm:text-base"
                 >
-                  Confirmar <Plus size={18} />
+                  Confirmar • R$ {((selectedProduct.promotional_price != null ? Number(selectedProduct.promotional_price) : selectedProduct.price) + selectedExtras.reduce((a, b) => a + b.price, 0)).toFixed(2)} <Plus size={18} />
                 </button>
               </div>
             </motion.div>
@@ -875,7 +1115,7 @@ const SalesPage = () => {
         )}
       </AnimatePresence>
 
-      {/* Payment Modal */}
+      {/* Payment Modal - PIX Mercado Pago */}
       <AnimatePresence>
         {showPayment && lastOrder && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
@@ -883,49 +1123,86 @@ const SalesPage = () => {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl"
+              className="bg-white w-full max-w-md rounded-[2.5rem] overflow-hidden shadow-2xl max-h-[90vh] overflow-y-auto"
             >
               <div className="p-8 text-center">
-                <div className="bg-orange-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <QrCode className="text-orange-600" size={40} />
+                <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <QrCode className="text-green-600" size={40} />
                 </div>
-                <h3 className="text-2xl font-bold mb-2">Pagamento via PIX</h3>
-                <p className="text-gray-500 mb-8">Escaneie o QR Code abaixo para pagar</p>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX</h3>
+                <p className="text-gray-500 text-sm mb-2">Pedido #{lastOrder.id} • {org?.name}</p>
+                <p className="text-3xl font-mono font-bold text-green-600 mb-6 break-words">R$ {lastOrder.total_price.toFixed(2)}</p>
 
-                <div className="bg-gray-50 p-6 rounded-3xl border-2 border-dashed border-gray-200 mb-8">
-                  <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=paty-churrasco-order-${lastOrder.id}`}
-                    alt="PIX QR Code"
-                    className="mx-auto w-48 h-48 rounded-xl shadow-sm"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="mt-6 flex flex-col gap-2">
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Valor a pagar</p>
-                    <p className="text-3xl font-mono font-bold text-orange-600">R$ {lastOrder.total_price.toFixed(2)}</p>
+                {(lastOrder as any).payment_method === 'delivery' || (lastOrder.payment_method === undefined && paymentMethod === 'delivery') ? (
+                  <div className="bg-orange-50 p-6 rounded-3xl border-2 border-dashed border-orange-200 mb-6 flex flex-col items-center gap-3">
+                    <Truck className="text-orange-600" size={50} />
+                    <p className="text-sm text-orange-700 font-bold uppercase tracking-widest text-center">Pedido Confirmado!</p>
+                    <p className="text-xs text-orange-600 text-center">Pague diretamente ao entregador no ato da entrega.</p>
                   </div>
-                </div>
+                ) : pixLoading ? (
+                  <div className="bg-gray-50 p-8 rounded-3xl border-2 border-dashed border-gray-200 mb-6 flex flex-col items-center gap-3">
+                    <div className="w-12 h-12 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-sm text-gray-500 font-medium">Gerando QR Code...</p>
+                  </div>
+                ) : pixData ? (
+                  <div className="mb-6">
+                    <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
+                      {pixData.qr_code_base64 ? (
+                        <img
+                          src={`data:image/png;base64,${pixData.qr_code_base64}`}
+                          alt="QR Code PIX"
+                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white"
+                        />
+                      ) : (
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(pixData.qr_code)}`}
+                          alt="QR Code PIX"
+                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white"
+                          referrerPolicy="no-referrer"
+                        />
+                      )}
+                    </div>
+                    {pixData.qr_code && (
+                      <button
+                        onClick={copyPixCode}
+                        className={cn(
+                          "w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl font-bold text-sm transition-all border-2",
+                          pixCopied
+                            ? "bg-green-50 border-green-300 text-green-700"
+                            : "bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100"
+                        )}
+                      >
+                        {pixCopied ? <><CheckCircle2 size={18} /> Código copiado!</> : <><Copy size={18} /> Copiar código Copia e Cola</>}
+                      </button>
+                    )}
+                    <div className="mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2">
+                      <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700 text-left">Seu pedido será confirmado automaticamente após o pagamento. Não precisa clicar em nenhum botão!</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-gray-50 p-6 rounded-3xl border-2 border-dashed border-gray-200 mb-6">
+                    <QrCode size={80} className="mx-auto text-gray-300 mb-3" />
+                    <p className="text-sm text-gray-500">PIX não disponível ou aguardando.</p>
+                  </div>
+                )}
 
                 <div className="space-y-3">
+                  {!pixData && !pixLoading && (
+                    <button
+                      onClick={confirmPayment}
+                      className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
+                    >
+                      Já paguei! <CheckCircle2 size={20} />
+                    </button>
+                  )}
                   <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(`paty-churrasco-key-${lastOrder.id}`);
-                      alert("Chave PIX copiada!");
-                    }}
-                    className="w-full flex items-center justify-center gap-2 py-3 text-sm font-bold text-gray-600 hover:bg-gray-50 rounded-xl transition-colors"
+                    onClick={() => { setShowPayment(false); setPixData(null); }}
+                    className="w-full py-3 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    <Copy size={18} /> Copiar Chave PIX
-                  </button>
-                  <button
-                    onClick={confirmPayment}
-                    className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
-                  >
-                    Já paguei! <CheckCircle2 size={20} />
+                    Fechar e pagar depois
                   </button>
                 </div>
-
-                <p className="mt-6 text-[10px] text-gray-400 flex items-center justify-center gap-1">
-                  <AlertCircle size={12} /> Seu pedido só será preparado após a confirmação
-                </p>
               </div>
             </motion.div>
           </div>
@@ -975,6 +1252,14 @@ const KitchenPage = () => {
     });
   };
 
+  const confirmDeliveryPayment = async (orderId: number) => {
+    await fetch(`/api/orders/${orderId}/payment`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_status: 'paid' })
+    });
+  };
+
   const activeOrders = orders.filter(o => o.status === 'pending' || o.status === 'preparing');
 
   return (
@@ -1002,7 +1287,7 @@ const KitchenPage = () => {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               className={cn(
-                "bg-white p-6 rounded-3xl border-2 shadow-sm relative overflow-hidden",
+                "bg-white p-6 rounded-3xl border-2 shadow-sm relative overflow-hidden flex flex-col",
                 order.status === 'pending' ? "border-red-100" : "border-orange-100"
               )}
             >
@@ -1015,18 +1300,33 @@ const KitchenPage = () => {
                 <div>
                   <h3 className="font-bold text-xl">#{order.id}</h3>
                   <p className="text-sm font-medium text-gray-600">{order.customer_name}</p>
-                  <div className={cn(
-                    "mt-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase inline-block",
-                    order.payment_status === 'paid' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                  )}>
-                    {order.payment_status === 'paid' ? "Pago" : "Pagamento Pendente"}
+                  <div className="mt-1 flex gap-1 items-center">
+                    <div className={cn(
+                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                      order.payment_status === 'paid' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
+                    )}>
+                      {order.payment_status === 'paid' ? "Pago" : "Pendente"}
+                    </div>
+                    {(order as any).payment_method === 'delivery' && (
+                      <div className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700 flex items-center gap-1">
+                        <Truck size={10} /> Entrega
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 text-gray-400 text-xs">
-                  <Clock size={12} />
-                  {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <div className="flex items-center gap-1 text-gray-400 text-xs text-right">
+                  <span className="block">{new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
               </div>
+
+              {order.payment_status === 'pending' && (order as any).payment_method === 'delivery' && (
+                <button
+                  onClick={() => confirmDeliveryPayment(order.id)}
+                  className="w-full mb-4 bg-blue-600 text-white py-2 rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg shadow-blue-100"
+                >
+                  <DollarSign size={14} /> Confirmar Recebimento
+                </button>
+              )}
 
               <div className="space-y-2 mb-6">
                 {order.items.map((item, idx) => {
@@ -1068,23 +1368,30 @@ const KitchenPage = () => {
                 })}
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex gap-2 mt-auto pt-2">
                 {order.status === 'pending' ? (
                   <button
                     onClick={() => updateStatus(order.id, 'preparing')}
                     className="flex-1 bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 transition-colors"
                   >
-                    Preparar
+                    Começar Preparo
                   </button>
                 ) : (
                   <button
+                    disabled={order.payment_status === 'pending' && (order as any).payment_method === 'pix'}
                     onClick={() => updateStatus(order.id, 'ready')}
-                    className="flex-1 bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                    className={cn(
+                      "flex-1 bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2",
+                      order.payment_status === 'pending' && (order as any).payment_method === 'pix' ? "opacity-50 cursor-not-allowed" : ""
+                    )}
                   >
                     <CheckCircle2 size={20} /> Pronto
                   </button>
                 )}
               </div>
+              {order.payment_status === 'pending' && (order as any).payment_method === 'pix' && (
+                <p className="text-[9px] text-gray-400 text-center italic mt-2">Aguardando pagamento PIX para finalizar.</p>
+              )}
             </motion.div>
           ))}
         </AnimatePresence>
@@ -1095,6 +1402,9 @@ const KitchenPage = () => {
 
 const DeliveryPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [showQrModal, setShowQrModal] = useState<Order | null>(null);
+  const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
 
   const { org } = useTenant();
 
@@ -1106,8 +1416,55 @@ const DeliveryPage = () => {
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: status as any } : o));
     });
 
-    return () => socket.off("order:update");
+    socket.on("order:payment_update", ({ id, payment_status }: { id: number, payment_status: string }) => {
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, payment_status: payment_status as any } : o));
+    });
+
+    return () => {
+      socket.off("order:update");
+      socket.off("order:payment_update");
+    };
   }, [org]);
+
+  useEffect(() => {
+    if (showQrModal && org) {
+      const currentOrder = orders.find(o => o.id === showQrModal.id);
+      if (currentOrder && currentOrder.payment_status === 'paid') {
+        updateStatus(currentOrder.id, 'delivered');
+        setShowQrModal(null);
+      }
+    }
+  }, [orders, showQrModal, org]);
+
+  useEffect(() => {
+    if (showQrModal && showQrModal.payment_status !== 'paid' && org) {
+      setPixLoading(true);
+      fetch(`/api/${org.id}/pix/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          total_price: showQrModal.total_price,
+          order_id: showQrModal.id,
+          description: `Pedido #${showQrModal.id} (Entrega)`
+        })
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.qr_code) setPixData(data);
+          if (data.payment_id) {
+            fetch(`/api/orders/${showQrModal.id}/payment`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mp_payment_id: data.payment_id.toString() })
+            });
+          }
+        })
+        .catch(console.error)
+        .finally(() => setPixLoading(false));
+    } else {
+      setPixData(null);
+    }
+  }, [showQrModal, org]);
 
   const updateStatus = async (id: number, status: string) => {
     await fetch(`/api/orders/${id}/status`, {
@@ -1115,6 +1472,18 @@ const DeliveryPage = () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
     });
+  };
+
+  const confirmPaymentAndDeliver = async (order: Order) => {
+    // 1. Confirm payment
+    await fetch(`/api/orders/${order.id}/payment`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_status: 'paid' })
+    });
+    // 2. Mark as delivered
+    await updateStatus(order.id, 'delivered');
+    setShowQrModal(null);
   };
 
   const deliveryOrders = orders.filter(o => o.status === 'ready' || o.status === 'shipped');
@@ -1178,8 +1547,17 @@ const DeliveryPage = () => {
                       </div>
                     )}
                   </div>
-                  <div className="text-right">
+                  <div className="flex flex-col items-end gap-2 text-right">
                     <p className="font-mono font-bold text-xl">R$ {order.total_price.toFixed(2)}</p>
+                    {order.payment_status === 'paid' ? (
+                      <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-[10px] font-bold flex items-center gap-1 uppercase">
+                        <CheckCircle2 size={12} /> Pago
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 bg-orange-100 text-orange-800 rounded-full text-[10px] font-bold flex items-center gap-1 uppercase">
+                        <Clock size={12} /> A Receber
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="bg-gray-50 p-4 rounded-2xl mb-6">
@@ -1215,7 +1593,13 @@ const DeliveryPage = () => {
                 </button>
               ) : (
                 <button
-                  onClick={() => updateStatus(order.id, 'delivered')}
+                  onClick={() => {
+                    if (order.payment_status !== 'paid') {
+                      setShowQrModal(order);
+                    } else {
+                      updateStatus(order.id, 'delivered');
+                    }
+                  }}
                   className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
                 >
                   <CheckCircle2 size={20} /> Entregue
@@ -1225,6 +1609,82 @@ const DeliveryPage = () => {
           ))
         )}
       </div>
+
+      <AnimatePresence>
+        {showQrModal && (
+          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, y: 100 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 100 }}
+              className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <QrCode className="text-blue-600" /> Cobrar Pedido
+                </h3>
+                <button
+                  onClick={() => setShowQrModal(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="text-center mb-6">
+                <p className="text-gray-500 mb-2">Total a receber:</p>
+                <p className="text-4xl font-black text-blue-600">
+                  R$ {showQrModal.total_price.toFixed(2)}
+                </p>
+                <div className="mt-6 flex justify-center min-h-[220px]">
+                  {pixLoading ? (
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                      <p className="text-sm text-gray-500 font-medium">Gerando PIX...</p>
+                    </div>
+                  ) : pixData ? (
+                    <div className="bg-gray-100 p-4 rounded-3xl inline-block border-4 border-white shadow-xl">
+                      {pixData.qr_code_base64 ? (
+                        <img
+                          src={`data:image/png;base64,${pixData.qr_code_base64}`}
+                          alt="QR Code PIX"
+                          className="w-[180px] h-[180px]"
+                        />
+                      ) : (
+                        <QrCode size={180} className="text-gray-800" />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 p-4 rounded-3xl inline-block border-4 border-white shadow-xl flex items-center justify-center w-[210px] h-[210px]">
+                      <p className="text-gray-400 text-sm">Erro ao gerar PIX</p>
+                    </div>
+                  )}
+                </div>
+                <p className="text-sm text-gray-400 mt-4 leading-snug">
+                  Peça ao cliente para escanear se desejar pagar via PIX.<br />
+                  A <strong className="text-blue-600">validação é automática</strong> pelo Mercado Pago.<br />
+                  Se for dinheiro/máquina, confirme abaixo.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => confirmPaymentAndDeliver(showQrModal)}
+                  className="w-full bg-orange-100 text-orange-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-orange-200 transition"
+                >
+                  <CheckCircle2 size={18} /> Forçar Recebimento (Dinheiro/Cartão)
+                </button>
+                <button
+                  onClick={() => setShowQrModal(null)}
+                  className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-gray-200 transition"
+                >
+                  Voltar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1535,6 +1995,195 @@ const SaaSAdminPage = () => {
   );
 };
 
+const FinancePage = () => {
+  const { org } = useTenant();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('today');
+
+  useEffect(() => {
+    if (!org) return;
+    setLoading(true);
+    fetch(`/api/${org.id}/orders`)
+      .then(r => r.json())
+      .then(data => { setOrders(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [org]);
+
+  const now = new Date();
+  const filtered = orders.filter(o => {
+    const d = new Date(o.created_at);
+    if (period === 'today') return d.toDateString() === now.toDateString();
+    if (period === 'week') {
+      const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 7);
+      return d >= weekAgo;
+    }
+    if (period === 'month') {
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }
+    return true;
+  });
+
+  const paidOrders = filtered.filter(o => o.payment_status === 'paid' || o.payment_status === 'confirmed');
+  const totalRevenue = paidOrders.reduce((s, o) => s + (o.total_price || 0), 0);
+  const totalAll = filtered.reduce((s, o) => s + (o.total_price || 0), 0);
+  const avgTicket = paidOrders.length > 0 ? totalRevenue / paidOrders.length : 0;
+  const pendingRevenue = filtered.filter(o => o.payment_status === 'pending').reduce((s, o) => s + (o.total_price || 0), 0);
+
+  const periodLabels = { today: 'Hoje', week: 'Últimos 7 dias', month: 'Este mês', all: 'Todos os tempos' };
+
+  const formatCurrency = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
+  const formatDate = (s: string) => new Date(s).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  // Group revenue by day (last 7 days)
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now); d.setDate(now.getDate() - (6 - i));
+    const label = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit' });
+    const dayOrders = orders.filter(o => new Date(o.created_at).toDateString() === d.toDateString() && (o.payment_status === 'paid' || o.payment_status === 'confirmed'));
+    const total = dayOrders.reduce((s, o) => s + (o.total_price || 0), 0);
+    return { label, total };
+  });
+  const maxDay = Math.max(...last7.map(d => d.total), 1);
+
+  return (
+    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-5xl mx-auto">
+      <header className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-4xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
+            <DollarSign size={36} className="text-green-600" />
+            Financeiro
+          </h1>
+          <p className="text-gray-500 mt-1">Faturamento e relatórios da loja</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          {(['today', 'week', 'month', 'all'] as const).map(p => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={cn(
+                "px-4 py-2 rounded-xl text-sm font-bold transition-all",
+                period === p ? "bg-green-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+              )}
+            >
+              {periodLabels[p]}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+          <div className="w-10 h-10 bg-green-100 rounded-2xl flex items-center justify-center mb-3">
+            <TrendingUp size={20} className="text-green-600" />
+          </div>
+          <p className="text-xs font-bold text-gray-400 uppercase">Faturamento</p>
+          <p className="text-2xl font-black text-green-600 mt-1">{formatCurrency(totalRevenue)}</p>
+          <p className="text-xs text-gray-400 mt-1">{paidOrders.length} pedidos pagos</p>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+          <div className="w-10 h-10 bg-blue-100 rounded-2xl flex items-center justify-center mb-3">
+            <ShoppingBag size={20} className="text-blue-600" />
+          </div>
+          <p className="text-xs font-bold text-gray-400 uppercase">Total Pedidos</p>
+          <p className="text-2xl font-black text-blue-600 mt-1">{filtered.length}</p>
+          <p className="text-xs text-gray-400 mt-1">{formatCurrency(totalAll)} bruto</p>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+          <div className="w-10 h-10 bg-purple-100 rounded-2xl flex items-center justify-center mb-3">
+            <BarChart3 size={20} className="text-purple-600" />
+          </div>
+          <p className="text-xs font-bold text-gray-400 uppercase">Ticket Médio</p>
+          <p className="text-2xl font-black text-purple-600 mt-1">{formatCurrency(avgTicket)}</p>
+          <p className="text-xs text-gray-400 mt-1">por pedido pago</p>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+          <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center mb-3">
+            <Clock size={20} className="text-amber-600" />
+          </div>
+          <p className="text-xs font-bold text-gray-400 uppercase">A Receber</p>
+          <p className="text-2xl font-black text-amber-600 mt-1">{formatCurrency(pendingRevenue)}</p>
+          <p className="text-xs text-gray-400 mt-1">pagamentos pendentes</p>
+        </div>
+      </div>
+
+      {/* Mini Bar Chart - last 7 days */}
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 mb-8">
+        <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+          <TrendingUp size={18} className="text-green-500" />
+          Faturamento — Últimos 7 dias
+        </h3>
+        <div className="flex items-end gap-3 h-32">
+          {last7.map((day, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-1">
+              <span className="text-[10px] font-bold text-gray-500">{day.total > 0 ? formatCurrency(day.total) : ''}</span>
+              <div
+                className="w-full rounded-t-lg bg-gradient-to-t from-green-500 to-green-300 transition-all duration-500"
+                style={{ height: `${Math.max((day.total / maxDay) * 96, day.total > 0 ? 8 : 2)}px` }}
+              />
+              <span className="text-[10px] text-gray-400 text-center leading-tight">{day.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Orders Table */}
+      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="font-bold text-gray-800">Pedidos — {periodLabels[period]}</h3>
+          <span className="text-sm text-gray-400">{filtered.length} pedidos</span>
+        </div>
+        {loading ? (
+          <div className="py-16 text-center text-gray-400">Carregando...</div>
+        ) : filtered.length === 0 ? (
+          <div className="py-16 text-center text-gray-400">Nenhum pedido neste período</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">#</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Cliente</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Data</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Itens</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Total</th>
+                  <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Pagamento</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {[...filtered].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).map(order => (
+                  <tr key={order.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4 font-mono text-sm font-bold text-gray-400">#{order.id}</td>
+                    <td className="px-6 py-4">
+                      <p className="font-bold text-gray-800 text-sm">{order.customer_name || 'Anônimo'}</p>
+                      {order.customer_phone && <p className="text-xs text-gray-400">{order.customer_phone}</p>}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">{formatDate(order.created_at)}</td>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {Array.isArray(order.items) ? order.items.map((it: any) => `${it.quantity}x ${it.name}`).join(', ').slice(0, 40) + (order.items.length > 1 ? '...' : '') : '-'}
+                    </td>
+                    <td className="px-6 py-4 font-mono font-bold text-gray-900">{formatCurrency(order.total_price || 0)}</td>
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "px-2 py-1 rounded-full text-[10px] font-black uppercase",
+                        (order.payment_status === 'paid' || order.payment_status === 'confirmed') ? "bg-green-100 text-green-700" :
+                          order.payment_status === 'pending' ? "bg-amber-100 text-amber-700" : "bg-gray-100 text-gray-500"
+                      )}>
+                        {order.payment_status === 'paid' || order.payment_status === 'confirmed' ? 'Pago' :
+                          order.payment_status === 'pending' ? 'Pendente' : order.payment_status || '-'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const AdminPage = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [extraIngredients, setExtraIngredients] = useState<ExtraIngredient[]>([]);
@@ -1564,28 +2213,135 @@ const AdminPage = () => {
       .catch(err => console.error("Erro ao carregar ingredientes extras:", err));
   }, [org]);
 
-  const addProduct = async (e: React.FormEvent) => {
+  // Mercado Pago settings
+  const [mpToken, setMpToken] = useState("");
+  const [mpSaving, setMpSaving] = useState(false);
+  const [mpSaved, setMpSaved] = useState(false);
+
+  // Logo settings
+  const [logoPreview, setLogoPreview] = useState(org?.branding?.logoUrl || "");
+  const [logoSaving, setLogoSaving] = useState(false);
+  const [logoSaved, setLogoSaved] = useState(false);
+
+  // Promotions
+  const [editingPromo, setEditingPromo] = useState<number | null>(null);
+  const [promoPrice, setPromoPrice] = useState("");
+
+  const savePromo = async (productId: number) => {
+    const price = promoPrice.trim() === "" ? null : parseFloat(promoPrice);
+    try {
+      const res = await fetch(`/api/products/${productId}/promo`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ promotional_price: price })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setProducts(products.map(p => p.id === productId ? { ...p, promotional_price: updated.promotional_price } : p));
+      } else {
+        const errText = await res.text();
+        console.error("Save promo error:", errText);
+        alert("Erro ao salvar promoção: " + errText);
+      }
+    } catch (e) {
+      console.error("Network error on savePromo:", e);
+    }
+    setEditingPromo(null);
+    setPromoPrice("");
+  };
+
+  const saveLogo = async (dataUrl: string) => {
+    if (!org) return;
+    setLogoSaving(true);
+    try {
+      const res = await fetch(`/api/organizations/${org.id}/logo`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logoUrl: dataUrl })
+      });
+      if (res.ok) {
+        setLogoSaved(true);
+        setTimeout(() => setLogoSaved(false), 3000);
+      }
+    } finally {
+      setLogoSaving(false);
+    }
+  };
+
+  const saveMpToken = async () => {
+    if (!org || !mpToken.trim()) return;
+    setMpSaving(true);
+    try {
+      const res = await fetch(`/api/organizations/${org.id}/mp-token`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mp_access_token: mpToken.trim() })
+      });
+      if (res.ok) {
+        setMpSaved(true);
+        setMpToken("");
+        setTimeout(() => setMpSaved(false), 3000);
+      } else {
+        alert("Erro ao salvar. Verifique o Access Token.");
+      }
+    } catch (err) {
+      alert("Erro ao salvar token do Mercado Pago.");
+    } finally {
+      setMpSaving(false);
+    }
+  };
+
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  const startEditProduct = (product: Product) => {
+    setEditingProduct(product);
+    setName(product.name);
+    setDescription(product.description);
+    setPrice(product.price.toString());
+    setIngredients(product.ingredients);
+    setCategory(product.category);
+    setImageUrl(product.image_url || "");
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelEdit = () => {
+    setEditingProduct(null);
+    setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl("");
+  };
+
+  const saveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch(`/api/${org?.id}/products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl })
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || "Erro ao salvar produto");
+      if (editingProduct) {
+        // Editar produto existente
+        const res = await fetch(`/api/products/${editingProduct.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl })
+        });
+        if (!res.ok) throw new Error("Erro ao atualizar produto");
+        setProducts(products.map(p => p.id === editingProduct.id
+          ? { ...p, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }
+          : p
+        ));
+        setEditingProduct(null);
+        alert("Produto atualizado com sucesso!");
+      } else {
+        // Criar novo produto
+        const res = await fetch(`/api/${org?.id}/products`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl })
+        });
+        if (!res.ok) {
+          const errorData = await res.json();
+          throw new Error(errorData.error || "Erro ao salvar produto");
+        }
+        const data = await res.json();
+        setProducts([...products, { id: data.id, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }]);
+        alert("Produto salvo com sucesso!");
       }
-
-      const data = await res.json();
-      setProducts([...products, { id: data.id, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }]);
-      setName("");
-      setDescription("");
-      setPrice("");
-      setIngredients("");
-      setImageUrl("");
-      alert("Produto salvo com sucesso!");
+      setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl("");
     } catch (err: any) {
       console.error("Erro ao salvar produto:", err);
       alert(err.message || "Erro ao salvar produto. Verifique se a imagem não é muito grande.");
@@ -1597,17 +2353,43 @@ const AdminPage = () => {
     setProducts(products.filter(p => p.id !== id));
   };
 
-  const addExtraIngredient = async (e: React.FormEvent) => {
+  const [editingExtra, setEditingExtra] = useState<ExtraIngredient | null>(null);
+
+  const startEditExtra = (extra: ExtraIngredient) => {
+    setEditingExtra(extra);
+    setExtraName(extra.name);
+    setExtraPrice(extra.price.toString());
+  };
+
+  const cancelEditExtra = () => {
+    setEditingExtra(null);
+    setExtraName(""); setExtraPrice("");
+  };
+
+  const saveExtraIngredient = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch("/api/extra-ingredients", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: extraName, price: parseFloat(extraPrice) })
-    });
-    const data = await res.json();
-    setExtraIngredients([...extraIngredients, { id: data.id, name: extraName, price: parseFloat(extraPrice) }]);
-    setExtraName("");
-    setExtraPrice("");
+    if (editingExtra) {
+      const res = await fetch(`/api/extra-ingredients/${editingExtra.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: extraName, price: parseFloat(extraPrice) })
+      });
+      if (res.ok) {
+        setExtraIngredients(extraIngredients.map(ex =>
+          ex.id === editingExtra.id ? { ...ex, name: extraName, price: parseFloat(extraPrice) } : ex
+        ));
+      }
+      setEditingExtra(null);
+    } else {
+      const res = await fetch(`/api/${org?.id}/extra-ingredients`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: extraName, price: parseFloat(extraPrice) })
+      });
+      const data = await res.json();
+      setExtraIngredients([...extraIngredients, { id: data.id, name: extraName, price: parseFloat(extraPrice) }]);
+    }
+    setExtraName(""); setExtraPrice("");
   };
 
   const deleteExtraIngredient = async (id: number) => {
@@ -1627,8 +2409,15 @@ const AdminPage = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1">
-          <form onSubmit={addProduct} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
-            <h2 className="text-xl font-bold mb-4">Novo Produto</h2>
+          <form onSubmit={saveProduct} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold">{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h2>
+              {editingProduct && (
+                <button type="button" onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors">
+                  <X size={14} /> Cancelar
+                </button>
+              )}
+            </div>
             <div>
               <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tipo de Produto</label>
               <div className="grid grid-cols-2 gap-2">
@@ -1689,15 +2478,15 @@ const AdminPage = () => {
             <div>
               <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Imagem do Produto</label>
               <div className="space-y-3">
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center overflow-hidden">
                   <input
                     type="text"
                     value={imageUrl}
                     onChange={e => setImageUrl(e.target.value)}
-                    className="flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                    className="min-w-0 flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
                     placeholder="Cole uma URL ou envie um arquivo"
                   />
-                  <label className="cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
+                  <label className="shrink-0 cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
                     <input
                       type="file"
                       accept="image/*"
@@ -1747,9 +2536,20 @@ const AdminPage = () => {
                 />
               </div>
             )}
-            <button className="w-full bg-black text-white py-3 rounded-2xl font-bold hover:bg-gray-800 transition-colors">
-              Salvar Produto
+            <button className={cn(
+              "w-full py-3 rounded-2xl font-bold transition-colors",
+              editingProduct
+                ? "bg-orange-600 text-white hover:bg-orange-700"
+                : "bg-black text-white hover:bg-gray-800"
+            )}>
+              {editingProduct ? 'Salvar Alterações' : 'Salvar Produto'}
             </button>
+            {editingProduct && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
+                <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                <p className="text-xs text-amber-700">Editando: <strong>{editingProduct.name}</strong></p>
+              </div>
+            )}
           </form>
         </div>
 
@@ -1792,12 +2592,22 @@ const AdminPage = () => {
                     </td>
                     <td className="px-6 py-4 font-mono font-medium">R$ {product.price.toFixed(2)}</td>
                     <td className="px-6 py-4 text-right">
-                      <button
-                        onClick={() => deleteProduct(product.id)}
-                        className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => startEditProduct(product)}
+                          className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
+                          title="Editar"
+                        >
+                          <Pencil size={18} />
+                        </button>
+                        <button
+                          onClick={() => deleteProduct(product.id)}
+                          className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
+                          title="Excluir"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1810,8 +2620,8 @@ const AdminPage = () => {
               <h3 className="text-lg font-bold text-gray-900">Ingredientes Extras (Adicionais)</h3>
             </div>
             <div className="p-6 bg-gray-50 border-b border-gray-100">
-              <form onSubmit={addExtraIngredient} className="flex gap-4 items-end">
-                <div className="flex-1">
+              <form onSubmit={saveExtraIngredient} className="flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-0">
                   <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome do Adicional</label>
                   <input
                     required
@@ -1834,9 +2644,19 @@ const AdminPage = () => {
                     placeholder="0.00"
                   />
                 </div>
-                <button type="submit" className="bg-orange-600 text-white px-6 py-2 h-[42px] rounded-xl font-bold hover:bg-orange-700 transition-colors">
-                  Adicionar
-                </button>
+                <div className="flex gap-2">
+                  <button type="submit" className={cn(
+                    "px-6 py-2 h-[42px] rounded-xl font-bold transition-colors",
+                    editingExtra ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-orange-600 text-white hover:bg-orange-700"
+                  )}>
+                    {editingExtra ? 'Salvar' : 'Adicionar'}
+                  </button>
+                  {editingExtra && (
+                    <button type="button" onClick={cancelEditExtra} className="px-4 py-2 h-[42px] rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">
+                      <X size={18} />
+                    </button>
+                  )}
+                </div>
               </form>
             </div>
             <table className="w-full text-left border-collapse">
@@ -1858,12 +2678,22 @@ const AdminPage = () => {
                       <td className="px-6 py-4 font-bold">{extra.name}</td>
                       <td className="px-6 py-4 font-mono font-medium text-orange-600">+ R$ {extra.price.toFixed(2)}</td>
                       <td className="px-6 py-4 text-right">
-                        <button
-                          onClick={() => deleteExtraIngredient(extra.id)}
-                          className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 size={18} />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => startEditExtra(extra)}
+                            className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
+                            title="Editar"
+                          >
+                            <Pencil size={18} />
+                          </button>
+                          <button
+                            onClick={() => deleteExtraIngredient(extra.id)}
+                            className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
+                            title="Excluir"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1872,6 +2702,210 @@ const AdminPage = () => {
             </table>
           </div>
         </div>
+      </div>
+
+      {/* Logo da Loja */}
+      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center">
+            <Store size={24} className="text-orange-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Logo da Loja</h2>
+            <p className="text-sm text-gray-500">Faça upload de uma imagem para usar como logo</p>
+          </div>
+        </div>
+        <div className="flex flex-col sm:flex-row items-start gap-6">
+          <div className="shrink-0">
+            {logoPreview ? (
+              <img src={logoPreview} alt="Logo" className="w-24 h-24 rounded-2xl object-cover border-2 border-gray-200 shadow-sm" />
+            ) : (
+              <div className="w-24 h-24 rounded-2xl bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center">
+                <Store size={32} className="text-gray-400" />
+              </div>
+            )}
+          </div>
+          <div className="flex-1 space-y-3">
+            <label className="block cursor-pointer">
+              <span className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Imagem</span>
+              <div className="flex items-center gap-3 bg-gray-50 border-2 border-dashed border-gray-300 hover:border-orange-400 rounded-2xl p-4 transition-colors group">
+                <div className="w-10 h-10 bg-orange-100 group-hover:bg-orange-200 rounded-xl flex items-center justify-center transition-colors shrink-0">
+                  <Plus size={20} className="text-orange-600" />
+                </div>
+                <div>
+                  <p className="font-bold text-gray-700 text-sm">Clique para escolher uma imagem</p>
+                  <p className="text-xs text-gray-400">PNG, JPG, WEBP até 5MB</p>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      const dataUrl = reader.result as string;
+                      setLogoPreview(dataUrl);
+                      saveLogo(dataUrl);
+                    };
+                    reader.readAsDataURL(file);
+                  }}
+                />
+              </div>
+            </label>
+            {logoPreview && (
+              <div className="flex gap-2">
+                <div className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all",
+                  logoSaved ? "bg-green-100 text-green-700" : logoSaving ? "bg-gray-100 text-gray-500" : "bg-orange-50 text-orange-600"
+                )}>
+                  {logoSaved ? <><CheckCircle2 size={14} /> Logo salva!</> : logoSaving ? "Salvando..." : <><CheckCircle2 size={14} /> Pronto para salvar</>}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setLogoPreview(""); saveLogo(""); }}
+                  className="text-xs text-red-400 hover:text-red-600 px-3 py-1.5 rounded-xl hover:bg-red-50 transition-colors"
+                >
+                  Remover logo
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Promoções de Produtos */}
+      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
+        <div className="p-6 border-b border-gray-100 flex items-center gap-3">
+          <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center">
+            <TrendingDown size={24} className="text-red-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Promoções</h2>
+            <p className="text-sm text-gray-500">Defina preços promocionais para seus produtos</p>
+          </div>
+        </div>
+        <table className="w-full text-left">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Produto</th>
+              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Preço Normal</th>
+              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Preço Promo</th>
+              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase text-right">Ação</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-50">
+            {products.map(product => (
+              <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4">
+                  <div className="flex items-center gap-3">
+                    {product.image_url && <img src={product.image_url} alt={product.name} className="w-9 h-9 rounded-lg object-cover bg-gray-100" referrerPolicy="no-referrer" />}
+                    <span className="font-bold text-gray-800 text-sm">{product.name}</span>
+                  </div>
+                </td>
+                <td className="px-6 py-4 font-mono font-medium text-gray-500">R$ {product.price.toFixed(2)}</td>
+                <td className="px-6 py-4">
+                  {editingPromo === product.id ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={promoPrice}
+                        onChange={e => setPromoPrice(e.target.value)}
+                        placeholder="Deixe vazio p/ remover"
+                        className="w-36 px-3 py-1.5 text-sm border border-orange-300 rounded-xl focus:ring-2 focus:ring-orange-400 outline-none"
+                        autoFocus
+                      />
+                      <button onClick={() => savePromo(product.id)} className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors">
+                        <CheckCircle2 size={18} />
+                      </button>
+                      <button onClick={() => { setEditingPromo(null); setPromoPrice(""); }} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
+                        <X size={18} />
+                      </button>
+                    </div>
+                  ) : (product as any).promotional_price != null ? (
+                    <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-black">
+                      🔥 R$ {Number((product as any).promotional_price).toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-gray-300 text-sm">—</span>
+                  )}
+                </td>
+                <td className="px-6 py-4 text-right">
+                  <button
+                    onClick={() => { setEditingPromo(product.id); setPromoPrice((product as any).promotional_price?.toString() || ""); }}
+                    className="text-orange-400 hover:text-orange-600 p-2 rounded-lg hover:bg-orange-50 transition-colors"
+                    title="Definir promoção"
+                  >
+                    <Pencil size={18} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mercado Pago Configuration */}
+      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="w-12 h-12 bg-sky-100 rounded-2xl flex items-center justify-center">
+            <QrCode size={24} className="text-sky-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Pagamento via PIX</h2>
+            <p className="text-sm text-gray-500">Conecte sua conta do Mercado Pago para receber pagamentos automáticos</p>
+          </div>
+        </div>
+
+        <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 mb-6 flex items-start gap-3">
+          <AlertCircle size={18} className="text-sky-600 shrink-0 mt-0.5" />
+          <div className="text-sm text-sky-800">
+            <p className="font-bold mb-1">Como obter seu Access Token:</p>
+            <ol className="list-decimal list-inside space-y-1 text-sky-700">
+              <li>Acesse <strong>mercadopago.com.br</strong></li>
+              <li>Vá em <strong>Suas integrações → Credenciais</strong></li>
+              <li>Copie o <strong>Access Token de Produção</strong></li>
+              <li>Cole abaixo e clique em Salvar</li>
+            </ol>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-4">
+          <input
+            type="password"
+            value={mpToken}
+            onChange={e => setMpToken(e.target.value)}
+            placeholder="APP_USR-xxxx... (Access Token do Mercado Pago)"
+            className="flex-1 px-4 py-3 rounded-2xl border border-gray-200 bg-gray-50 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 focus:border-sky-400"
+          />
+          <button
+            onClick={saveMpToken}
+            disabled={mpSaving || !mpToken.trim()}
+            className={cn(
+              "px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap",
+              mpSaved
+                ? "bg-green-100 text-green-700 border border-green-300"
+                : "bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-sky-100"
+            )}
+          >
+            {mpSaving ? (
+              <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Salvando...</>
+            ) : mpSaved ? (
+              <><CheckCircle2 size={18} /> Token salvo!</>
+            ) : (
+              "Salvar Token"
+            )}
+          </button>
+        </div>
+
+        {mpSaved && (
+          <div className="mt-3 flex items-center gap-2 text-green-700 text-sm font-medium">
+            <CheckCircle2 size={16} />
+            Mercado Pago configurado! Seus clientes já podem pagar via PIX automático. 🎉
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2515,7 +3549,12 @@ const CourierPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [trackingOrderId, setTrackingOrderId] = useState<number | null>(null);
   const [location, setLocation] = useState<{ lat: number, lng: number } | null>(null);
+  const [showQrModal, setShowQrModal] = useState<Order | null>(null);
   const watchIdRef = useRef<number | null>(null);
+  const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+
+  const { org } = useTenant();
 
   useEffect(() => {
     fetch("/api/orders").then(res => res.json()).then(setOrders);
@@ -2528,16 +3567,62 @@ const CourierPage = () => {
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: status as any } : o));
     });
 
+    socket.on("order:payment_update", ({ id, payment_status }: { id: number, payment_status: string }) => {
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, payment_status: payment_status as any } : o));
+    });
+
     return () => {
       socket.off("order:new");
       socket.off("order:update");
+      socket.off("order:payment_update");
       if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
     };
   }, []);
 
+  useEffect(() => {
+    if (showQrModal && org) {
+      const currentOrder = orders.find(o => o.id === showQrModal.id);
+      if (currentOrder && currentOrder.payment_status === 'paid') {
+        updateStatus(currentOrder.id, 'delivered');
+        setShowQrModal(null);
+        setTrackingOrderId(null);
+        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    }
+  }, [orders, showQrModal, org]);
+
+  useEffect(() => {
+    if (showQrModal && showQrModal.payment_status !== 'paid' && org) {
+      setPixLoading(true);
+      fetch(`/api/${org.id}/pix/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          total_price: showQrModal.total_price,
+          order_id: showQrModal.id,
+          description: `Pedido #${showQrModal.id} (Courier)`
+        })
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data.qr_code) setPixData(data);
+          if (data.payment_id) {
+            fetch(`/api/orders/${showQrModal.id}/payment`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mp_payment_id: data.payment_id.toString() })
+            });
+          }
+        })
+        .catch(console.error)
+        .finally(() => setPixLoading(false));
+    } else {
+      setPixData(null);
+    }
+  }, [showQrModal, org]);
+
   const startTracking = (orderId: number) => {
     if (trackingOrderId === orderId) {
-      // Stop tracking
       if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
       setTrackingOrderId(null);
       return;
@@ -2550,11 +3635,7 @@ const CourierPage = () => {
         (position) => {
           const { latitude, longitude } = position.coords;
           setLocation({ lat: latitude, lng: longitude });
-          socket.emit("delivery:update_location", {
-            orderId,
-            latitude,
-            longitude
-          });
+          socket.emit("delivery:update_location", { orderId, latitude, longitude });
         },
         (error) => console.error(error),
         { enableHighAccuracy: true }
@@ -2570,6 +3651,20 @@ const CourierPage = () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status })
     });
+  };
+
+  const confirmPaymentAndDeliver = async (order: Order) => {
+    // 1. Confirm payment
+    await fetch(`/api/orders/${order.id}/payment`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_status: 'paid' })
+    });
+    // 2. Mark as delivered
+    await updateStatus(order.id, 'delivered');
+    setShowQrModal(null);
+    setTrackingOrderId(null);
+    if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
   };
 
   const deliveryOrders = orders.filter(o => o.status === 'ready' || o.status === 'shipped');
@@ -2591,22 +3686,33 @@ const CourierPage = () => {
           </div>
         ) : (
           deliveryOrders.map(order => (
-            <div key={order.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm">
+            <div key={order.id} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm relative overflow-hidden">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-bold text-xl">#{order.id}</h3>
                   <p className="text-gray-600 font-medium">{order.customer_name}</p>
                   <p className="text-sm text-gray-400">{order.address || "Sem endereço cadastrado"}</p>
                 </div>
-                <span className={cn(
-                  "px-3 py-1 rounded-full text-xs font-bold uppercase",
-                  order.status === 'shipped' ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"
-                )}>
-                  {order.status === 'shipped' ? "Em Rota" : "Pronto"}
-                </span>
+                <div className="flex flex-col items-end gap-2">
+                  <span className={cn(
+                    "px-3 py-1 rounded-full text-xs font-bold uppercase",
+                    order.status === 'shipped' ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700"
+                  )}>
+                    {order.status === 'shipped' ? "Em Rota" : "Pronto"}
+                  </span>
+                  {order.payment_status === 'paid' ? (
+                    <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-bold flex items-center gap-1">
+                      <CheckCircle2 size={12} /> Pago
+                    </span>
+                  ) : (
+                    <span className="px-3 py-1 bg-orange-100 text-orange-800 rounded-full text-xs font-bold flex items-center gap-1 uppercase">
+                      <Clock size={12} /> A Receber
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3 mt-6">
                 {order.status === 'ready' ? (
                   <button
                     onClick={() => updateStatus(order.id, 'shipped')}
@@ -2622,20 +3728,24 @@ const CourierPage = () => {
                         "py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2",
                         trackingOrderId === order.id
                           ? "bg-red-100 text-red-600 hover:bg-red-200"
-                          : "bg-blue-600 text-white hover:bg-blue-700"
+                          : "bg-blue-100 text-blue-700 hover:bg-blue-200"
                       )}
                     >
                       {trackingOrderId === order.id ? (
-                        <><StopCircle size={18} /> Parar GPS</>
+                        <><StopCircle size={18} /> GPS Ligado</>
                       ) : (
                         <><Navigation size={18} /> Ligar GPS</>
                       )}
                     </button>
                     <button
                       onClick={() => {
-                        updateStatus(order.id, 'delivered');
-                        setTrackingOrderId(null);
-                        if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+                        if (order.payment_status !== 'paid') {
+                          setShowQrModal(order);
+                        } else {
+                          updateStatus(order.id, 'delivered');
+                          setTrackingOrderId(null);
+                          if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+                        }
                       }}
                       className="bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
                     >
@@ -2658,13 +3768,90 @@ const CourierPage = () => {
               {trackingOrderId === order.id && location && (
                 <div className="mt-4 p-3 bg-blue-50 rounded-xl text-xs text-blue-800 flex items-center gap-2 animate-pulse">
                   <div className="w-2 h-2 bg-blue-600 rounded-full" />
-                  Transmitindo localização: {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
+                  Transmitindo: {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
                 </div>
               )}
             </div>
           ))
         )}
       </div>
+
+      <AnimatePresence>
+        {showQrModal && (
+          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, y: 100 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 100 }}
+              className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold flex items-center gap-2">
+                  <QrCode className="text-blue-600" /> Cobrar Pedido
+                </h3>
+                <button
+                  onClick={() => setShowQrModal(null)}
+                  className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="text-center mb-6">
+                <p className="text-gray-500 mb-2">Total a receber:</p>
+                <p className="text-4xl font-black text-blue-600">
+                  R$ {showQrModal.total_price.toFixed(2)}
+                </p>
+                <div className="mt-6 flex justify-center min-h-[220px]">
+                  {pixLoading ? (
+                    <div className="flex flex-col items-center justify-center space-y-4">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                      <p className="text-sm text-gray-500 font-medium">Gerando PIX...</p>
+                    </div>
+                  ) : pixData ? (
+                    <div className="bg-gray-100 p-4 rounded-3xl inline-block border-4 border-white shadow-xl">
+                      {pixData.qr_code_base64 ? (
+                        <img
+                          src={`data:image/png;base64,${pixData.qr_code_base64}`}
+                          alt="QR Code PIX"
+                          className="w-[180px] h-[180px]"
+                        />
+                      ) : (
+                        <QrCode size={180} className="text-gray-800" />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="bg-gray-100 p-4 rounded-3xl inline-block border-4 border-white shadow-xl flex items-center justify-center w-[210px] h-[210px]">
+                      <p className="text-gray-400 text-sm">Erro ao gerar PIX</p>
+                    </div>
+                  )}
+                </div>
+                <p className="text-sm text-gray-400 mt-4 leading-snug">
+                  Peça ao cliente para escanear se desejar pagar via PIX.<br />
+                  A <strong className="text-blue-600">validação é automática</strong> pelo Mercado Pago.<br />
+                  Se for dinheiro/máquina, confirme abaixo.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => confirmPaymentAndDeliver(showQrModal)}
+                  className="w-full bg-orange-100 text-orange-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-orange-200 transition"
+                >
+                  <CheckCircle2 size={18} /> Forçar Recebimento (Dinheiro/Cartão)
+                </button>
+                <button
+                  onClick={() => setShowQrModal(null)}
+                  className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-gray-200 transition"
+                >
+                  Voltar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 };
