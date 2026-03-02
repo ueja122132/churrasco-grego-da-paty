@@ -165,21 +165,25 @@ async function startServer() {
         // Find the order by looking for pending payment with this MP payment
         // Update order to paid and emit socket event
         console.log(`[WEBHOOK] MP payment confirmed: ${data.id}`);
-        // We update based on the mp_payment_id stored in the order
         const { data: orders } = await supabase
           .from('orders')
-          .select('id')
+          .select('id, status')
           .eq('mp_payment_id', data.id.toString())
           .limit(1);
 
         if (orders && orders.length > 0) {
+          const currentStatus = orders[0].status;
+          const newStatus = currentStatus === 'pending' ? 'preparing' : currentStatus;
+
           await supabase
             .from('orders')
-            .update({ payment_status: 'paid', status: 'preparing' })
+            .update({ payment_status: 'paid', status: newStatus })
             .eq('id', orders[0].id);
 
           io.emit("order:payment_update", { id: orders[0].id, payment_status: 'paid' });
-          io.emit("order:update", { id: orders[0].id, status: 'preparing' });
+          if (newStatus !== currentStatus) {
+            io.emit("order:update", { id: orders[0].id, status: newStatus });
+          }
         }
       }
       res.sendStatus(200);
@@ -237,7 +241,7 @@ async function startServer() {
     try {
       // In a real app we'd use supabase.auth.signUp
       // For temporary compatibility, we insert into profiles
-      const { data, error } = await supabase.from('profiles').insert([{ name, phone, points: 0 }]).select();
+      const { data, error } = await supabase.from('profiles').insert([{ name, phone, password, points: 0 }]).select();
       if (error) throw error;
       res.json(data[0]);
     } catch (err) {
