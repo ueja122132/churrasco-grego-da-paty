@@ -1188,19 +1188,11 @@ const SalesPage = () => {
                 )}
 
                 <div className="space-y-3">
-                  {!pixData && !pixLoading && (
-                    <button
-                      onClick={confirmPayment}
-                      className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
-                    >
-                      Já paguei! <CheckCircle2 size={20} />
-                    </button>
-                  )}
                   <button
                     onClick={() => { setShowPayment(false); setPixData(null); }}
                     className="w-full py-3 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
                   >
-                    Fechar e pagar depois
+                    Fechar e aguardar confirmação automática
                   </button>
                 </div>
               </div>
