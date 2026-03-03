@@ -1149,11 +1149,29 @@ const SalesPage = () => {
                   <div className="mb-6">
                     <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
                       {pixData.qr_code ? (
-                        <img
-                          src={`https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(pixData.qr_code)}&choe=UTF-8`}
-                          alt="QR Code PIX"
-                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white block"
-                        />
+                        <div className="relative mx-auto w-48 h-48 bg-white rounded-xl shadow-lg border-4 border-white overflow-hidden">
+                          <img
+                            src={`https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(pixData.qr_code)}&choe=UTF-8`}
+                            alt="QR Code PIX"
+                            className="w-full h-full object-contain"
+                            onError={(e) => {
+                              const img = e.currentTarget;
+                              if (img.src.includes('googleapis')) {
+                                img.src = `https://quickchart.io/qr?text=${encodeURIComponent(pixData.qr_code)}&size=300`;
+                              } else if (img.src.includes('quickchart')) {
+                                img.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixData.qr_code)}`;
+                              }
+                            }}
+                          />
+                        </div>
+                      ) : pixData.qr_code_base64 ? (
+                        <div className="bg-white p-2 rounded-xl border-4 border-white shadow-lg mx-auto w-48 h-48">
+                          <img
+                            src={`data:image/png;base64,${pixData.qr_code_base64.replace(/\s/g, '')}`}
+                            alt="QR Code PIX"
+                            className="w-full h-full object-contain"
+                          />
+                        </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center h-48 text-gray-400">
                           <QrCode size={48} />
