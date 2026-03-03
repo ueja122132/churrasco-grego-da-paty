@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist/ manually included for now to fix build issues
 .env.local
 .env
 *.db
