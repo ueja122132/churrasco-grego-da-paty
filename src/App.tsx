@@ -1317,16 +1317,7 @@ const KitchenPage = () => {
                 </div>
               </div>
 
-              {order.payment_status === 'pending' && (
-                <button
-                  onClick={() => confirmDeliveryPayment(order.id)}
-                  className="w-full mb-4 bg-blue-600 text-white py-2 rounded-xl text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100 active:scale-95"
-                >
-                  <DollarSign size={14} /> {(order as any).payment_method === 'pix' ? "Confirmar Pix Manual" : "Confirmar Recebimento"}
-                </button>
-              )}
-
-              <div className="space-y-2 mb-6">
+              <div className="space-y-2 mb-6 flex-1">
                 {order.items.map((item, idx) => {
                   const product = products.find(p => p.id === item.id || p.name === item.name);
                   const ingredients = item.ingredients || product?.ingredients;
@@ -1366,30 +1357,42 @@ const KitchenPage = () => {
                 })}
               </div>
 
-              <div className="flex gap-2 mt-auto pt-2">
-                {order.status === 'pending' ? (
+              <div className="mt-auto pt-4 border-t border-gray-50 flex flex-col gap-2">
+                {order.payment_status === 'pending' && (
                   <button
-                    onClick={() => updateStatus(order.id, 'preparing')}
-                    className="flex-1 bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 transition-colors"
+                    onClick={() => confirmDeliveryPayment(order.id)}
+                    className="w-full bg-blue-600 text-white py-2.5 rounded-2xl text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100 active:scale-95"
                   >
-                    Começar Preparo
-                  </button>
-                ) : (
-                  <button
-                    disabled={order.payment_status === 'pending' && (order as any).payment_method === 'pix'}
-                    onClick={() => updateStatus(order.id, 'ready')}
-                    className={cn(
-                      "flex-1 bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2",
-                      order.payment_status === 'pending' && (order as any).payment_method === 'pix' ? "opacity-50 cursor-not-allowed" : ""
-                    )}
-                  >
-                    <CheckCircle2 size={20} /> Pronto
+                    <DollarSign size={14} /> {(order as any).payment_method === 'pix' ? "Confirmar Pix Manual" : "Confirmar Recebimento"}
                   </button>
                 )}
+
+                <div className="flex gap-2">
+                  {order.status === 'pending' ? (
+                    <button
+                      onClick={() => updateStatus(order.id, 'preparing')}
+                      className="flex-1 bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 transition-all shadow-lg shadow-orange-100 active:scale-95"
+                    >
+                      Começar Preparo
+                    </button>
+                  ) : (
+                    <button
+                      disabled={order.payment_status === 'pending' && (order as any).payment_method === 'pix'}
+                      onClick={() => updateStatus(order.id, 'ready')}
+                      className={cn(
+                        "flex-1 bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-100 active:scale-95",
+                        order.payment_status === 'pending' && (order as any).payment_method === 'pix' ? "opacity-50 cursor-not-allowed" : ""
+                      )}
+                    >
+                      <CheckCircle2 size={20} /> Pronto
+                    </button>
+                  )}
+                </div>
+
+                {order.payment_status === 'pending' && (order as any).payment_method === 'pix' && (
+                  <p className="text-[10px] text-gray-400 text-center italic mt-1 font-medium">Aguardando pagamento PIX para finalizar.</p>
+                )}
               </div>
-              {order.payment_status === 'pending' && (order as any).payment_method === 'pix' && (
-                <p className="text-[9px] text-gray-400 text-center italic mt-2">Aguardando pagamento PIX para finalizar.</p>
-              )}
             </motion.div>
           ))}
         </AnimatePresence>
