@@ -1130,7 +1130,7 @@ const SalesPage = () => {
                 <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
                   <QrCode className="text-green-600" size={40} />
                 </div>
-                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX (v2.3)</h3>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX (v2.4 Final)</h3>
                 <p className="text-gray-500 text-sm mb-2">Pedido #{lastOrder.id} • {org?.name}</p>
                 <p className="text-3xl font-mono font-bold text-green-600 mb-6 break-words">R$ {lastOrder.total_price.toFixed(2)}</p>
 
@@ -1147,35 +1147,24 @@ const SalesPage = () => {
                   </div>
                 ) : pixData ? (
                   <div className="mb-6">
-                    <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
+                    <div className="bg-white p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4 flex items-center justify-center min-h-[220px]" style={{ backgroundColor: '#FFFFFF' }}>
                       {pixData.qr_code ? (
-                        <div className="relative mx-auto w-48 h-48 bg-white rounded-xl shadow-lg border-4 border-white overflow-hidden">
-                          <img
-                            src={`https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(pixData.qr_code)}&choe=UTF-8`}
-                            alt="QR Code PIX"
-                            className="w-full h-full object-contain"
-                            onError={(e) => {
-                              const img = e.currentTarget;
-                              if (img.src.includes('googleapis')) {
-                                img.src = `https://quickchart.io/qr?text=${encodeURIComponent(pixData.qr_code)}&size=300`;
-                              } else if (img.src.includes('quickchart')) {
-                                img.src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixData.qr_code)}`;
-                              }
-                            }}
-                          />
-                        </div>
-                      ) : pixData.qr_code_base64 ? (
-                        <div className="bg-white p-2 rounded-xl border-4 border-white shadow-lg mx-auto w-48 h-48">
-                          <img
-                            src={`data:image/png;base64,${pixData.qr_code_base64.replace(/\s/g, '')}`}
-                            alt="QR Code PIX"
-                            className="w-full h-full object-contain"
-                          />
-                        </div>
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixData.qr_code)}`}
+                          alt="QR Code PIX"
+                          className="w-48 h-48 block"
+                          style={{ backgroundColor: 'white', display: 'block', margin: '0 auto' }}
+                          onError={(e) => {
+                            const img = e.currentTarget;
+                            if (img.src.includes('qrserver')) {
+                              img.src = `https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(pixData.qr_code)}&choe=UTF-8`;
+                            }
+                          }}
+                        />
                       ) : (
                         <div className="flex flex-col items-center justify-center h-48 text-gray-400">
                           <QrCode size={48} />
-                          <p className="text-xs mt-2">Gerando QR Code...</p>
+                          <p className="text-xs mt-2">Erro ao carregar imagem.</p>
                         </div>
                       )}
                     </div>
