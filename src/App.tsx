@@ -1148,19 +1148,18 @@ const SalesPage = () => {
                 ) : pixData ? (
                   <div className="mb-6">
                     <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
-                      {pixData.qr_code_base64 ? (
+                      {pixData.qr_code ? (
                         <img
-                          src={`data:image/png;base64,${pixData.qr_code_base64.replace(/\s/g, '')}`}
-                          alt="QR Code PIX"
-                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white object-contain"
-                        />
-                      ) : (
-                        <img
-                          src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(pixData.qr_code)}`}
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixData.qr_code)}`}
                           alt="QR Code PIX"
                           className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white object-contain"
                           referrerPolicy="no-referrer"
                         />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-48 text-gray-400">
+                          <QrCode size={48} />
+                          <p className="text-xs mt-2">Gerando QR Code...</p>
+                        </div>
                       )}
                     </div>
                     {pixData.qr_code && (
