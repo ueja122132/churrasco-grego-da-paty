@@ -1130,7 +1130,7 @@ const SalesPage = () => {
                 <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
                   <QrCode className="text-green-600" size={40} />
                 </div>
-                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX</h3>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX (v2.2)</h3>
                 <p className="text-gray-500 text-sm mb-2">Pedido #{lastOrder.id} • {org?.name}</p>
                 <p className="text-3xl font-mono font-bold text-green-600 mb-6 break-words">R$ {lastOrder.total_price.toFixed(2)}</p>
 
@@ -1150,10 +1150,9 @@ const SalesPage = () => {
                     <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
                       {pixData.qr_code ? (
                         <img
-                          src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(pixData.qr_code)}`}
+                          src={`https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=${encodeURIComponent(pixData.qr_code)}&choe=UTF-8`}
                           alt="QR Code PIX"
-                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white object-contain"
-                          referrerPolicy="no-referrer"
+                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white block"
                         />
                       ) : (
                         <div className="flex flex-col items-center justify-center h-48 text-gray-400">
