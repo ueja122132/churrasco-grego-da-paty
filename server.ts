@@ -129,6 +129,10 @@ async function startServer() {
       }
 
       // Call Mercado Pago API
+      const appUrl = (process.env.VITE_APP_URL && process.env.VITE_APP_URL.length > 5)
+        ? process.env.VITE_APP_URL
+        : 'https://churrasco-paty-production.up.railway.app';
+
       const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
         method: "POST",
         headers: {
@@ -141,14 +145,14 @@ async function startServer() {
           description: description || `Pedido #${order_id} - ${org.name}`,
           payment_method_id: "pix",
           payer: { email: "cliente@pedido.com" },
-          notification_url: `${process.env.VITE_APP_URL || 'https://churrasco-paty-production.up.railway.app'}/api/webhook/mercadopago`
+          notification_url: `${appUrl}/api/webhook/mercadopago`
         })
       });
 
       const mpData = await mpRes.json();
 
       if (!mpRes.ok) {
-        console.error("[MP] Error:", mpData);
+        console.error("[MP] Error Detail:", JSON.stringify(mpData, null, 2));
         return res.status(400).json({ error: "Erro ao gerar PIX. Verifique as credenciais do Mercado Pago." });
       }
 
