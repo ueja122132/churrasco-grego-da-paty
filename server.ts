@@ -141,7 +141,7 @@ async function startServer() {
           description: description || `Pedido #${order_id} - ${org.name}`,
           payment_method_id: "pix",
           payer: { email: "cliente@pedido.com" },
-          notification_url: `${process.env.VITE_APP_URL || ''}/api/webhook/mercadopago`
+          notification_url: `${process.env.VITE_APP_URL || 'https://churrasco-paty-production.up.railway.app'}/api/webhook/mercadopago`
         })
       });
 
