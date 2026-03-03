@@ -41,7 +41,15 @@ async function startServer() {
         return res.status(404).json({ error: "Organização não encontrada", details: error.message });
       }
       console.log(`[BACKEND] Found org: ${data.name}`);
-      res.json(data);
+
+      // Sanitize the data to prevent secret token leakage
+      const sanitizedData = {
+        ...data,
+        has_mp_token: !!data.mp_access_token
+      };
+      delete sanitizedData.mp_access_token;
+
+      res.json(sanitizedData);
     } catch (err: any) {
       console.error(`[BACKEND] Fatal error for ${req.params.slug}:`, err.message);
       res.status(500).json({ error: "Erro interno no servidor" });

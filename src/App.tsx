@@ -149,6 +149,7 @@ interface Organization {
     secondaryColor: string;
     logoUrl: string | null;
   };
+  has_mp_token?: boolean;
 }
 
 const TenantContext = React.createContext<{
@@ -2206,7 +2207,7 @@ const AdminPage = () => {
   }, [org]);
 
   // Mercado Pago settings
-  const [mpToken, setMpToken] = useState("");
+  const [mpToken, setMpToken] = useState(org?.has_mp_token ? "••••••••••••••••" : "");
   const [mpSaving, setMpSaving] = useState(false);
   const [mpSaved, setMpSaved] = useState(false);
 
@@ -2261,7 +2262,7 @@ const AdminPage = () => {
   };
 
   const saveMpToken = async () => {
-    if (!org || !mpToken.trim()) return;
+    if (!org || !mpToken.trim() || mpToken.includes("••••")) return;
     setMpSaving(true);
     try {
       const res = await fetch(`/api/organizations/${org.id}/mp-token`, {
