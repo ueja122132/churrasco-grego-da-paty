@@ -1150,15 +1150,15 @@ const SalesPage = () => {
                     <div className="bg-gray-50 p-4 rounded-3xl border-2 border-dashed border-green-200 mb-4">
                       {pixData.qr_code_base64 ? (
                         <img
-                          src={`data:image/png;base64,${pixData.qr_code_base64}`}
+                          src={`data:image/png;base64,${pixData.qr_code_base64.replace(/\s/g, '')}`}
                           alt="QR Code PIX"
-                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white"
+                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white object-contain"
                         />
                       ) : (
                         <img
                           src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(pixData.qr_code)}`}
                           alt="QR Code PIX"
-                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white"
+                          className="mx-auto w-48 h-48 rounded-xl shadow-lg border-4 border-white bg-white object-contain"
                           referrerPolicy="no-referrer"
                         />
                       )}
