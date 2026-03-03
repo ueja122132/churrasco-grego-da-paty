@@ -174,27 +174,48 @@ async function startServer() {
     try {
       const { type, data } = req.body;
       if (type === 'payment' && data?.id) {
-        // Find the order by looking for pending payment with this MP payment
-        // Update order to paid and emit socket event
-        console.log(`[WEBHOOK] MP payment confirmed: ${data.id}`);
-        const { data: orders } = await supabase
+        console.log(`[WEBHOOK] Getting details for MP payment: ${data.id}`);
+
+        // We SHOULD fetch payment details to verify status, but for simplicity and speed 
+        // given the user's current situation, we could also rely on the notification data if it was provided.
+        // However, the standard way is to fetch. 
+        // For now, let's at least check if we can skip the fetch if we have direct orders matching this ID.
+
+        const { data: matchedOrders } = await supabase
           .from('orders')
-          .select('id, status')
+          .select('id, status, org_id')
           .eq('mp_payment_id', data.id.toString())
           .limit(1);
 
-        if (orders && orders.length > 0) {
-          const currentStatus = orders[0].status;
-          const newStatus = currentStatus === 'pending' ? 'preparing' : currentStatus;
+        if (matchedOrders && matchedOrders.length > 0) {
+          const order = matchedOrders[0];
 
-          await supabase
-            .from('orders')
-            .update({ payment_status: 'paid', status: newStatus })
-            .eq('id', orders[0].id);
+          // Fetch full payment details from MP to be sure it's approved
+          const { data: org } = await supabase.from('organizations').select('mp_access_token').eq('id', order.org_id).single();
 
-          io.emit("order:payment_update", { id: orders[0].id, payment_status: 'paid' });
-          if (newStatus !== currentStatus) {
-            io.emit("order:update", { id: orders[0].id, status: newStatus });
+          if (org?.mp_access_token) {
+            const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
+              headers: { "Authorization": `Bearer ${org.mp_access_token}` }
+            });
+            const mpData = await mpRes.json();
+
+            if (mpData.status === 'approved') {
+              const currentStatus = order.status;
+              const newStatus = currentStatus === 'pending' ? 'preparing' : currentStatus;
+
+              await supabase
+                .from('orders')
+                .update({ payment_status: 'paid', status: newStatus })
+                .eq('id', order.id);
+
+              io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+              if (newStatus !== currentStatus) {
+                io.emit("order:update", { id: order.id, status: newStatus });
+              }
+              console.log(`[WEBHOOK] Order #${order.id} paid via MP`);
+            } else {
+              console.log(`[WEBHOOK] Payment ${data.id} status is ${mpData.status}, skipping update.`);
+            }
           }
         }
       }

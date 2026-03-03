@@ -1317,12 +1317,12 @@ const KitchenPage = () => {
                 </div>
               </div>
 
-              {order.payment_status === 'pending' && (order as any).payment_method === 'delivery' && (
+              {order.payment_status === 'pending' && (
                 <button
                   onClick={() => confirmDeliveryPayment(order.id)}
-                  className="w-full mb-4 bg-blue-600 text-white py-2 rounded-xl text-xs font-bold hover:bg-blue-700 flex items-center justify-center gap-2 shadow-lg shadow-blue-100"
+                  className="w-full mb-4 bg-blue-600 text-white py-2 rounded-xl text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100 active:scale-95"
                 >
-                  <DollarSign size={14} /> Confirmar Recebimento
+                  <DollarSign size={14} /> {(order as any).payment_method === 'pix' ? "Confirmar Pix Manual" : "Confirmar Recebimento"}
                 </button>
               )}
 
