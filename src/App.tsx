@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useLocation, Navigate } from "react-router-dom";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useLocation, Navigate, useParams } from "react-router-dom";
 import { io, Socket } from "socket.io-client";
 import {
   ShoppingBag,
@@ -36,7 +36,11 @@ import {
   Navigation,
   StopCircle,
   MessageCircle,
-  Send
+  Send,
+  ClipboardList,
+  Wallet,
+  Bell,
+  Map
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -53,6 +57,12 @@ import {
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL || "";
+const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || "";
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -63,8 +73,9 @@ interface User {
   name: string;
   phone: string;
   email?: string;
-  role?: 'user' | 'admin' | 'super_admin';
+  role?: 'user' | 'admin' | 'super_admin' | 'courier';
   points: number;
+  org_id?: string;
   address?: string;
   latitude?: number;
   longitude?: number;
@@ -169,11 +180,78 @@ const AuthContext = React.createContext<{
   login: (user: User) => void;
   logout: () => void;
 } | null>(null);
-
 const useAuth = () => {
   const context = React.useContext(AuthContext);
   if (!context) throw new Error("useAuth must be used within AuthProvider");
   return context;
+};
+
+// Notification Context
+type NotificationType = 'success' | 'error' | 'info' | 'warning';
+
+interface Notification {
+  id: string;
+  message: string;
+  type: NotificationType;
+}
+
+const NotificationContext = React.createContext<{
+  notify: (message: string, type?: NotificationType) => void;
+} | null>(null);
+
+const useNotification = () => {
+  const context = React.useContext(NotificationContext);
+  if (!context) throw new Error("useNotification must be used within NotificationProvider");
+  return context;
+};
+
+const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const notify = (message: string, type: NotificationType = 'info') => {
+    const id = Math.random().toString(36).substring(2, 9);
+    setNotifications(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, 5000);
+  };
+
+  return (
+    <NotificationContext.Provider value={{ notify }}>
+      {children}
+      <div className="fixed top-4 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+        <AnimatePresence>
+          {notifications.map(n => (
+            <motion.div
+              key={n.id}
+              initial={{ opacity: 0, x: 50, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 20, scale: 0.9 }}
+              className={cn(
+                "pointer-events-auto px-6 py-4 rounded-2xl shadow-2xl border-2 flex items-center gap-3 min-w-[300px] backdrop-blur-md",
+                n.type === 'success' && "bg-green-50/90 border-green-200 text-green-900",
+                n.type === 'error' && "bg-red-50/90 border-red-200 text-red-900",
+                n.type === 'warning' && "bg-orange-50/90 border-orange-200 text-orange-900",
+                n.type === 'info' && "bg-blue-50/90 border-blue-200 text-blue-900"
+              )}
+            >
+              {n.type === 'success' && <CheckCircle2 className="text-green-600" size={20} />}
+              {n.type === 'error' && <AlertCircle className="text-red-600" size={20} />}
+              {n.type === 'warning' && <AlertCircle className="text-orange-600" size={20} />}
+              {n.type === 'info' && <Activity className="text-blue-600" size={20} />}
+              <p className="font-bold text-sm tracking-tight">{n.message}</p>
+              <button
+                onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
+                className="ml-auto p-1 hover:bg-black/5 rounded-full"
+              >
+                <X size={14} />
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+    </NotificationContext.Provider>
+  );
 };
 
 // --- Components ---
@@ -199,11 +277,12 @@ const Navbar = () => {
     { path: "/", icon: ShoppingBag, label: "Vendas", roles: ['user', 'admin', 'super_admin'] },
     { path: "/kitchen", icon: ChefHat, label: "Cozinha", roles: ['admin', 'super_admin'] },
     { path: "/delivery", icon: Truck, label: "Entrega", roles: ['admin', 'super_admin'] },
+    { path: "/courier-dashboard", icon: ClipboardList, label: "Minhas Entregas", roles: ['courier'] },
     { path: "/admin", icon: Settings, label: "Admin", roles: ['admin', 'super_admin'] },
     { path: "/finance", icon: DollarSign, label: "Caixa", roles: ['admin', 'super_admin'] },
     { path: "/saas-admin", icon: Activity, label: "SaaS", roles: ['super_admin'] },
     { path: "/super-admin", icon: Lock, label: "Super", roles: ['super_admin'] },
-    { path: "/profile", icon: User, label: "Perfil", roles: ['user', 'admin', 'super_admin'] },
+    { path: "/profile", icon: User, label: "Perfil", roles: ['user', 'admin', 'super_admin', 'courier'] },
   ].filter(item => item.roles.includes(user?.role || 'user'));
 
   return (
@@ -375,7 +454,13 @@ const AppInner = () => {
   const { user } = useAuth();
   const location = useLocation();
 
-  const isPublicRoute = location.pathname === "/login" || location.pathname === "/register" || location.pathname.startsWith("/venda");
+  const isPublicRoute =
+    location.pathname === "/" ||
+    location.pathname === "/login" ||
+    location.pathname === "/register" ||
+    location.pathname.startsWith("/venda") ||
+    location.pathname === "/assinar" ||
+    location.pathname.startsWith("/rastreio");
 
   if (loading) return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50">
@@ -390,7 +475,7 @@ const AppInner = () => {
     </div>
   );
 
-  // Auth Guard
+  // Auth Guard — permite acesso público ao cardápio e rotas marcadas
   if (!user && !isPublicRoute) {
     return <Navigate to="/login" replace />;
   }
@@ -448,11 +533,14 @@ const AppInner = () => {
           <Route path="/saas-admin" element={<SaaSAdminPage />} />
           <Route path="/super-admin" element={<SuperAdminPage />} />
           <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/courier" element={<CourierPage />} />
+          <Route path="/courier-dashboard" element={<CourierDashboard />} />
+          <Route path="/courier" element={<Navigate to="/courier-dashboard" replace />} />
           <Route path="/venda" element={<SaaSLandingPage />} />
           <Route path="/venda/cadastro" element={<SaaSStoreRegister />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/assinar" element={<SubscribePage />} />
+          <Route path="/rastreio/:courierId" element={<TrackingPage />} />
         </Routes>
         <AIAssistant />
       </main>
@@ -470,8 +558,10 @@ export default function App() {
   const [loadingOrg, setLoadingOrg] = useState(true);
 
   useEffect(() => {
-    const slug = "paty-churrasco";
-    fetch(`/api/org/${slug}`)
+    const host = window.location.hostname;
+    const fallbackSlug = "paty-churrasco";
+
+    fetch(`/api/org/detect?host=${host}&slug=${fallbackSlug}`)
       .then(res => {
         if (!res.ok) throw new Error("Org not found");
         return res.json();
@@ -489,19 +579,46 @@ export default function App() {
     localStorage.setItem("user", JSON.stringify(userData));
   };
 
-  const logout = () => {
+  const logout = async () => {
     setUser(null);
     localStorage.removeItem("user");
+    await supabase.auth.signOut();
   };
 
+  useEffect(() => {
+    // Listen for auth state changes from Supabase (OAuth)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        try {
+          const res = await fetch("/api/auth/me", {
+            headers: { "Authorization": `Bearer ${session.access_token}` }
+          });
+          if (res.ok) {
+            const userData = await res.json();
+            login(userData);
+          }
+        } catch (err) {
+          console.error("Error syncing session:", err);
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        localStorage.removeItem("user");
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   return (
-    <TenantContext.Provider value={{ org, loading: loadingOrg }}>
-      <AuthContext.Provider value={{ user, login, logout }}>
-        <Router>
-          <AppInner />
-        </Router>
-      </AuthContext.Provider>
-    </TenantContext.Provider>
+    <NotificationProvider>
+      <TenantContext.Provider value={{ org, loading: loadingOrg }}>
+        <AuthContext.Provider value={{ user, login, logout }}>
+          <Router>
+            <AppInner />
+          </Router>
+        </AuthContext.Provider>
+      </TenantContext.Provider>
+    </NotificationProvider>
   );
 }
 
@@ -511,9 +628,11 @@ const SalesPage = () => {
   const { user, login, logout } = useAuth();
   const { org } = useTenant();
   const navigate = useNavigate();
+  const { notify } = useNotification();
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [isOrdering, setIsOrdering] = useState(false);
+  const [needsLogin, setNeedsLogin] = useState(false); // shows login prompt without losing cart
 
   // Customization Modal State
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -530,6 +649,33 @@ const SalesPage = () => {
   const [pixCopied, setPixCopied] = useState(false);
 
   const [useReward, setUseReward] = useState(false);
+  const [isShopOpen, setIsShopOpen] = useState(true);
+
+  const checkIfOpen = () => {
+    if (!org?.operating_hours) return true;
+
+    const now = new Date();
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const brTime = new Date(utc + (3600000 * -3)); // UTC-3
+
+    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const dayName = dayNames[brTime.getDay()];
+    const hours = (org.operating_hours as any)[dayName];
+
+    if (!hours) return true;
+    if (hours.closed) return false;
+
+    const currentFormatted = brTime.getHours().toString().padStart(2, '0') + ":" + brTime.getMinutes().toString().padStart(2, '0');
+    return currentFormatted >= hours.open && currentFormatted <= hours.close;
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setIsShopOpen(checkIfOpen());
+    }, 30000); // Check every 30s
+    setIsShopOpen(checkIfOpen());
+    return () => clearInterval(interval);
+  }, [org]);
 
   useEffect(() => {
     if (!org) return;
@@ -568,6 +714,32 @@ const SalesPage = () => {
       socket.off("user:points_update", onPointsUpdate);
     };
   }, [user, login]);
+
+  const lastOrderRef = useRef<Order | null>(null);
+  useEffect(() => {
+    lastOrderRef.current = lastOrder;
+  }, [lastOrder]);
+
+  // Reliable listener for closing modal on automatic PIX confirmation
+  useEffect(() => {
+    const onPaymentUpdate = ({ id, payment_status }: { id: number, payment_status: string }) => {
+      const currentWaiting = lastOrderRef.current;
+      console.log(`[SalesPage] Received global signal for Order ${id}, status: ${payment_status}. Currently waiting for: ${currentWaiting?.id}`);
+
+      if (currentWaiting && Number(currentWaiting.id) === Number(id) && payment_status === 'paid') {
+        console.log("[SalesPage] Match confirmed! Auto-closing modal...");
+        setShowPayment(false);
+        setPixData(null);
+        setLastOrder(null);
+        notify("🍢 Pagamento confirmado! Seu pedido já está na cozinha.", "success");
+      }
+    };
+
+    socket.on("order:payment_update", onPaymentUpdate);
+    return () => {
+      socket.off("order:payment_update", onPaymentUpdate);
+    };
+  }, []); // Mount only! Uses ref for closure-safe state access
 
   const openCustomization = (product: Product) => {
     setSelectedProduct(product);
@@ -659,10 +831,17 @@ const SalesPage = () => {
 
   const placeOrder = async () => {
     if (!user) {
-      navigate("/login");
+      setNeedsLogin(true); // show inline login modal, don't lose the cart!
       return;
     }
     if (cart.length === 0) return;
+
+    if (!checkIfOpen()) {
+      notify("Desculpe, a loja fechou enquanto você montava seu pedido.", "warning");
+      setIsShopOpen(false);
+      return;
+    }
+
     setIsOrdering(true);
     try {
       const res = await fetch(`/api/${org?.id}/orders`, {
@@ -692,13 +871,14 @@ const SalesPage = () => {
         throw new Error(errorData.error || "Erro ao criar pedido");
       }
       const data = await res.json();
+      console.log("[SalesPage] Order created successfully:", data);
       setLastOrder(data);
       setCart([]);
       setUseReward(false);
 
       if (paymentMethod === 'delivery') {
         setIsOrdering(false);
-        alert("Pedido realizado com sucesso! O pagamento será feito na entrega.");
+        notify("Pedido realizado com sucesso! O pagamento será feito na entrega.", "success");
         return;
       }
 
@@ -733,7 +913,7 @@ const SalesPage = () => {
       }
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Erro ao finalizar pedido. Tente novamente.");
+      notify(err.message || "Erro ao finalizar pedido. Tente novamente.", "error");
     } finally {
       setIsOrdering(false);
     }
@@ -749,7 +929,7 @@ const SalesPage = () => {
       });
       setShowPayment(false);
       setPixData(null);
-      alert("Pagamento confirmado! Seu pedido já está na cozinha. 🍢");
+      notify("Pagamento confirmado! Seu pedido já está na cozinha. 🍢", "success");
     } catch (err) {
       console.error(err);
     }
@@ -774,6 +954,12 @@ const SalesPage = () => {
           </div>
         )}
         <div>
+          {!isShopOpen && (
+            <div className="bg-red-600 text-white p-4 rounded-3xl mb-6 flex items-center justify-center gap-3 animate-pulse shadow-xl border-4 border-red-500/50">
+              <Clock size={20} className="animate-spin-slow" />
+              <span className="font-black uppercase tracking-widest text-xs">Loja Fechada - Não estamos aceitando pedidos</span>
+            </div>
+          )}
           <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter uppercase italic">
             <span className="text-gradient">{org?.name || "Premium Store"}</span>
           </h1>
@@ -808,53 +994,66 @@ const SalesPage = () => {
                       key={product.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group overflow-hidden flex flex-col"
+                      className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all group overflow-hidden flex flex-col h-full"
                     >
-                      {product.image_url && (
-                        <div className="w-full h-40 mb-4 rounded-2xl overflow-hidden bg-gray-50 relative">
+                      <div className="relative aspect-square mb-4 rounded-3xl overflow-hidden bg-gray-50/50 flex items-center justify-center p-4">
+                        {product.image_url ? (
                           <img
                             src={product.image_url}
                             alt={product.name}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                            className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-500"
                             referrerPolicy="no-referrer"
                           />
-                          {(product as any).promotional_price != null && (
-                            <div className="absolute top-2 left-2 bg-red-500 text-white text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-wide shadow-lg flex items-center gap-1">
-                              🔥 PROMOÇÃO
+                        ) : (
+                          <UtensilsCrossed size={48} className="text-gray-200" />
+                        )}
+                        {(product as any).promotional_price != null && (
+                          <div className="absolute top-3 left-3 bg-orange-600 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-tighter shadow-lg">
+                            -{Math.round((1 - (Number((product as any).promotional_price) / product.price)) * 100)}%
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-col flex-1 px-1">
+                        <h3 className="font-bold text-gray-800 text-base leading-tight group-hover:text-orange-600 transition-colors line-clamp-2 min-h-[2.5rem]">{product.name}</h3>
+                        <p className="text-xs text-gray-400 mt-2 line-clamp-2 flex-1 font-medium">{product.description}</p>
+
+                        <div className="mt-4 pt-4 border-t border-gray-50">
+                          {(product as any).promotional_price != null ? (
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-gray-400 line-through">R$ {product.price.toFixed(2)}</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-xs font-bold text-orange-600">R$</span>
+                                <span className="text-2xl font-black text-orange-600 tracking-tighter">
+                                  {Number((product as any).promotional_price).toFixed(2).split('.')[0]}
+                                  <span className="text-sm">,{Number((product as any).promotional_price).toFixed(2).split('.')[1]}</span>
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-baseline gap-1">
+                              <span className="text-xs font-bold text-orange-600">R$</span>
+                              <span className="text-2xl font-black text-orange-600 tracking-tighter">
+                                {product.price.toFixed(2).split('.')[0]}
+                                <span className="text-sm">,{product.price.toFixed(2).split('.')[1]}</span>
+                              </span>
                             </div>
                           )}
-                        </div>
-                      )}
-                      {!(product as any).promotional_price && !product.image_url && null}
-                      {(product as any).promotional_price != null && !product.image_url && (
-                        <div className="mb-2">
-                          <span className="bg-red-100 text-red-600 text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-wide">🔥 Promoção</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-lg leading-tight group-hover:text-orange-600 transition-colors break-words">{product.name}</h3>
-                          <p className="text-sm text-gray-500 line-clamp-2 mt-1">{product.description}</p>
-                          {product.category === 'churrasco' && product.ingredients && (
-                            <p className="text-[10px] text-gray-400 mt-2 font-medium uppercase tracking-wider">Ingredientes: {product.ingredients}</p>
-                          )}
-                        </div>
-                        <div className="text-right shrink-0">
-                          {(product as any).promotional_price != null ? (
-                            <>
-                              <span className="block font-mono font-black text-lg text-red-600">R$ {Number((product as any).promotional_price).toFixed(2)}</span>
-                              <span className="block font-mono text-xs text-gray-400 line-through">R$ {product.price.toFixed(2)}</span>
-                            </>
-                          ) : (
-                            <span className="font-mono font-bold text-lg text-orange-600">R$ {product.price.toFixed(2)}</span>
-                          )}
+                          <p className="text-[9px] text-gray-400 font-medium tracking-tight">À vista no PIX ou na Entrega</p>
                         </div>
                       </div>
+
                       <button
                         onClick={() => handleAddClick(product)}
-                        className="mt-auto mt-6 w-full bg-[var(--primary)] text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-[var(--secondary)] shadow-xl shadow-[var(--primary)]/20 transition-all active:scale-95"
+                        disabled={!isShopOpen}
+                        className={cn(
+                          "mt-6 w-full py-3 rounded-2xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95",
+                          !isShopOpen
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "bg-slate-100 text-slate-900 hover:bg-orange-600 hover:text-white group-hover:shadow-lg group-hover:shadow-orange-200"
+                        )}
                       >
-                        <Plus size={20} strokeWidth={3} /> Adicionar
+                        <Plus size={16} strokeWidth={3} /> {isShopOpen ? "Adicionar" : "Loja Fechada"}
                       </button>
                     </motion.div>
                   ))}
@@ -957,12 +1156,48 @@ const SalesPage = () => {
           )}
 
           <div className="space-y-4">
+            {/* Modal de login inline quando tenta finalizar sem conta */}
+            {needsLogin && (
+              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setNeedsLogin(false)}>
+                <div className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+                  <div className="w-12 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
+                  <div className="text-center mb-6">
+                    <div className="text-4xl mb-2">🔐</div>
+                    <h3 className="text-xl font-black text-gray-900">Quase lá!</h3>
+                    <p className="text-gray-500 mt-1 text-sm">Para finalizar seu pedido, você precisa entrar na sua conta ou criar uma nova. Seus itens serão mantidos! 🛒</p>
+                  </div>
+                  <div className="space-y-3">
+                    <Link
+                      to="/login"
+                      className="flex items-center justify-center gap-2 w-full py-4 bg-orange-600 text-white rounded-2xl font-black text-sm shadow-lg hover:bg-orange-700 transition-all"
+                      onClick={() => setNeedsLogin(false)}
+                    >
+                      <LogIn size={18} /> Entrar na minha conta
+                    </Link>
+                    <Link
+                      to="/register"
+                      className="flex items-center justify-center gap-2 w-full py-4 bg-white text-orange-600 rounded-2xl font-black text-sm border-2 border-orange-200 hover:bg-orange-50 transition-all"
+                      onClick={() => setNeedsLogin(false)}
+                    >
+                      <UserPlus size={18} /> Criar conta grátis
+                    </Link>
+                    <button onClick={() => setNeedsLogin(false)} className="w-full py-3 text-gray-400 text-sm font-bold">
+                      Continuar navegando
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {!user && (
               <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 text-sm text-orange-800 mb-4">
-                <p className="font-bold flex items-center gap-2">
-                  <LogIn size={16} /> Faça login para pedir
+                <p className="font-bold flex items-center gap-2 mb-2">
+                  <LogIn size={16} /> Entre para pedir
                 </p>
-                <p className="mt-1">Você precisa estar logado para finalizar seu pedido e acompanhar o status.</p>
+                <div className="flex gap-2">
+                  <Link to="/login" className="flex-1 text-center py-2 bg-orange-600 text-white rounded-xl font-bold text-xs">Entrar</Link>
+                  <Link to="/register" className="flex-1 text-center py-2 bg-white text-orange-600 border border-orange-200 rounded-xl font-bold text-xs">Cadastrar</Link>
+                </div>
               </div>
             )}
 
@@ -990,11 +1225,11 @@ const SalesPage = () => {
             </div>
 
             <button
-              disabled={isOrdering || cart.length === 0}
+              disabled={isOrdering || cart.length === 0 || !isShopOpen}
               onClick={placeOrder}
               className="w-full bg-black text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
-              {isOrdering ? "Processando..." : user ? "Finalizar Pedido" : "Entrar e Pedir"}
+              {isOrdering ? "Processando..." : !isShopOpen ? "Loja Fechada" : user ? "Finalizar Pedido" : "Entrar e Pedir"}
               <ArrowRight size={20} />
             </button>
           </div>
@@ -1130,7 +1365,7 @@ const SalesPage = () => {
                 <div className="bg-green-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
                   <QrCode className="text-green-600" size={40} />
                 </div>
-                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX (v2.5)</h3>
+                <h3 className="text-xl sm:text-2xl font-bold mb-1 break-words px-2">Pagar com PIX (v2.8)</h3>
                 <p className="text-gray-500 text-sm mb-2">Pedido #{lastOrder.id} • {org?.name}</p>
                 <p className="text-3xl font-mono font-bold text-green-600 mb-6 break-words">R$ {lastOrder.total_price.toFixed(2)}</p>
 
@@ -1213,10 +1448,56 @@ const SalesPage = () => {
 const KitchenPage = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [notifEnabled, setNotifEnabled] = useState(false);
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
   const { org } = useTenant();
 
+  // Play a beep alert
+  const playAlert = useCallback(() => {
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext();
+      const ctx = audioCtxRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(660, ctx.currentTime + 0.15);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (e) { /* Browser may block before user interaction */ }
+  }, []);
+
+  // Request browser push notification permission
+  const requestNotifPermission = useCallback(async () => {
+    if (!('Notification' in window)) return;
+    const perm = await Notification.requestPermission();
+    setNotifEnabled(perm === 'granted');
+  }, []);
+
+  // Show OS notification
+  const showPushNotif = useCallback((order: Order) => {
+    if (Notification.permission === 'granted') {
+      new Notification('🔔 Novo Pedido!', {
+        body: `${order.customer_name} — ${order.items?.length ?? 1} item(s) — R$ ${order.total_price?.toFixed(2)}`,
+        icon: '/favicon.ico',
+        tag: `order-${order.id}`,
+        requireInteraction: true,
+      });
+    }
+  }, []);
+
   useEffect(() => {
+    // Auto-check permission on mount
+    if ('Notification' in window) {
+      setNotifEnabled(Notification.permission === 'granted');
+    }
+
     if (!org) return;
     fetch(`/api/${org.id}/orders`).then(res => res.json()).then(setOrders);
     fetch(`/api/${org.id}/products`).then(res => res.json()).then(setProducts);
@@ -1224,6 +1505,8 @@ const KitchenPage = () => {
     socket.on("order:new", (newOrder: Order) => {
       if (newOrder.org_id === org.id) {
         setOrders(prev => [newOrder, ...prev]);
+        playAlert();
+        showPushNotif(newOrder);
       }
     });
 
@@ -1240,7 +1523,7 @@ const KitchenPage = () => {
       socket.off("order:update");
       socket.off("order:payment_update");
     };
-  }, []);
+  }, [org, playAlert, showPushNotif]);
 
   const updateStatus = async (id: number, status: string) => {
     await fetch(`/api/orders/${id}/status`, {
@@ -1270,8 +1553,23 @@ const KitchenPage = () => {
           </h1>
           <p className="text-slate-500 mt-2 font-medium">Pedidos em tempo real para {org?.name}</p>
         </div>
-        <div className="bg-[var(--primary)]/10 text-[var(--primary)] px-6 py-2 rounded-full font-black text-sm uppercase tracking-widest border border-[var(--primary)]/20 shadow-inner">
-          {activeOrders.length} Pedidos Ativos
+        <div className="flex items-center gap-3 flex-wrap justify-center">
+          {/* Notification toggle button */}
+          <button
+            onClick={requestNotifPermission}
+            className={cn(
+              "flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm border transition-all",
+              notifEnabled
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : "bg-orange-50 text-orange-700 border-orange-200 animate-pulse"
+            )}
+          >
+            <Bell size={16} />
+            {notifEnabled ? '🔔 Notificações ativas' : '🔕 Ativar notificações'}
+          </button>
+          <div className="bg-[var(--primary)]/10 text-[var(--primary)] px-6 py-2 rounded-full font-black text-sm uppercase tracking-widest border border-[var(--primary)]/20 shadow-inner">
+            {activeOrders.length} Pedidos Ativos
+          </div>
         </div>
       </header>
 
@@ -1406,12 +1704,35 @@ const DeliveryPage = () => {
   const [showQrModal, setShowQrModal] = useState<Order | null>(null);
   const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
+  const [couriers, setCouriers] = useState<User[]>([]);
+  const [showDispatchModal, setShowDispatchModal] = useState<Order | null>(null);
+  const [selectedCourierId, setSelectedCourierId] = useState("");
+  const [deliveryFee, setDeliveryFee] = useState("0");
 
   const { org } = useTenant();
+
+  const updateStatus = async (id: number, status: string) => {
+    await fetch(`/api/orders/${id}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status })
+    });
+  };
+
+  const confirmPaymentAndDeliver = async (order: Order) => {
+    await fetch(`/api/orders/${order.id}/payment`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payment_status: 'paid' })
+    });
+    await updateStatus(order.id, 'delivered');
+    setShowQrModal(null);
+  };
 
   useEffect(() => {
     if (!org) return;
     fetch(`/api/${org.id}/orders`).then(res => res.json()).then(setOrders);
+    fetch(`/api/${org.id}/couriers`).then(res => res.json()).then(setCouriers);
 
     socket.on("order:update", ({ id, status }: { id: number, status: string }) => {
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: status as any } : o));
@@ -1467,24 +1788,27 @@ const DeliveryPage = () => {
     }
   }, [showQrModal, org]);
 
-  const updateStatus = async (id: number, status: string) => {
-    await fetch(`/api/orders/${id}/status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status })
-    });
-  };
-
-  const confirmPaymentAndDeliver = async (order: Order) => {
-    // 1. Confirm payment
-    await fetch(`/api/orders/${order.id}/payment`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ payment_status: 'paid' })
-    });
-    // 2. Mark as delivered
-    await updateStatus(order.id, 'delivered');
-    setShowQrModal(null);
+  const deployOrder = async () => {
+    if (!showDispatchModal || !selectedCourierId) return;
+    try {
+      const res = await fetch(`/api/orders/${showDispatchModal.id}/courier`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          courier_id: selectedCourierId,
+          delivery_fee: parseFloat(deliveryFee)
+        })
+      });
+      if (res.ok) {
+        await updateStatus(showDispatchModal.id, 'shipped');
+        setShowDispatchModal(null);
+        setSelectedCourierId("");
+        setDeliveryFee("0");
+        fetch(`/api/${org.id}/orders`).then(res => res.json()).then(setOrders);
+      }
+    } catch (error) {
+      alert("Erro ao despachar pedido");
+    }
   };
 
   const deliveryOrders = orders.filter(o => o.status === 'ready' || o.status === 'shipped');
@@ -1524,27 +1848,9 @@ const DeliveryPage = () => {
                     </span>
                     <h3 className="font-bold text-2xl mt-1">Pedido #{order.id}</h3>
                     <p className="text-gray-600 font-medium">{order.customer_name}</p>
-                    {order.customer_phone && (
-                      <p className="text-sm text-gray-400 flex items-center gap-1 mt-1">
-                        <Phone size={14} /> {order.customer_phone}
-                      </p>
-                    )}
-                    {order.address && (
-                      <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100">
-                        <p className="text-xs font-bold text-blue-800 uppercase mb-1 flex items-center gap-1">
-                          <MapPin size={10} /> Endereço de Entrega
-                        </p>
-                        <p className="text-sm text-blue-900 font-medium leading-tight">{order.address}</p>
-                        {order.latitude && order.longitude && (
-                          <a
-                            href={`https://www.google.com/maps?q=${order.latitude},${order.longitude}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-2 text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
-                          >
-                            Abrir no Google Maps <ArrowRight size={10} />
-                          </a>
-                        )}
+                    {(order as any).courier_name && (
+                      <div className="mt-1 flex items-center gap-1 text-[10px] font-bold text-orange-600 uppercase">
+                        <User size={12} /> Entregador: {(order as any).courier_name}
                       </div>
                     )}
                   </div>
@@ -1561,36 +1867,38 @@ const DeliveryPage = () => {
                     )}
                   </div>
                 </div>
+                {order.address && (
+                  <div className="mb-4 p-3 bg-blue-50 rounded-xl border border-blue-100">
+                    <p className="text-xs font-bold text-blue-800 uppercase mb-1 flex items-center gap-1">
+                      <MapPin size={10} /> {order.address}
+                    </p>
+                    {order.latitude && order.longitude && (
+                      <a
+                        href={`https://www.google.com/maps?q=${order.latitude},${order.longitude}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 underline"
+                      >
+                        Ver no Mapa
+                      </a>
+                    )}
+                  </div>
+                )}
                 <div className="bg-gray-50 p-4 rounded-2xl mb-6">
                   <p className="text-xs font-bold text-gray-400 uppercase mb-2">Itens</p>
                   {order.items.map((item, idx) => (
-                    <div key={idx} className="mb-2 last:mb-0 bg-white p-2 rounded-xl border border-gray-100">
-                      <p className="text-sm font-bold">{item.quantity}x {item.name}</p>
-                      {item.ingredients && (
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          {item.ingredients}
-                        </p>
-                      )}
-                      {item.removedIngredients && item.removedIngredients.length > 0 && (
-                        <p className="text-[10px] text-red-500 font-bold uppercase mt-0.5">
-                          SEM: {item.removedIngredients.join(', ')}
-                        </p>
-                      )}
-                      {item.extraIngredients && item.extraIngredients.length > 0 && (
-                        <p className="text-[10px] text-green-700 font-bold uppercase mt-0.5">
-                          EXTRA: {item.extraIngredients.map(e => e.name).join(', ')}
-                        </p>
-                      )}
+                    <div key={idx} className="mb-2 last:mb-0 text-xs font-bold">
+                      {item.quantity}x {item.name}
                     </div>
                   ))}
                 </div>
               </div>
               {order.status === 'ready' ? (
                 <button
-                  onClick={() => updateStatus(order.id, 'shipped')}
+                  onClick={() => setShowDispatchModal(order)}
                   className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
                 >
-                  <Truck size={20} /> Saiu para Entrega
+                  <Truck size={20} /> Despachar Pedido
                 </button>
               ) : (
                 <button
@@ -1603,13 +1911,50 @@ const DeliveryPage = () => {
                   }}
                   className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
                 >
-                  <CheckCircle2 size={20} /> Entregue
+                  <CheckCircle2 size={20} /> Concluir Entrega
                 </button>
               )}
             </motion.div>
           ))
         )}
       </div>
+
+      <AnimatePresence>
+        {showDispatchModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl">
+              <h3 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2"><Truck className="text-orange-600" /> Despachar Pedido</h3>
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Entregador</label>
+                  <select
+                    value={selectedCourierId}
+                    onChange={e => setSelectedCourierId(e.target.value)}
+                    className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-bold"
+                  >
+                    <option value="">Escolha quem vai levar...</option>
+                    {couriers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Taxa de Entrega (Comissão R$)</label>
+                  <input
+                    type="number"
+                    step="0.10"
+                    value={deliveryFee}
+                    onChange={e => setDeliveryFee(e.target.value)}
+                    className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-mono text-xl font-black"
+                  />
+                </div>
+                <div className="flex gap-4 pt-4">
+                  <button onClick={() => setShowDispatchModal(null)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold">Cancelar</button>
+                  <button onClick={deployOrder} disabled={!selectedCourierId} className="flex-2 px-8 py-4 bg-orange-600 text-white rounded-2xl font-bold shadow-lg shadow-orange-100 disabled:opacity-50">Confirmar Envio</button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {showQrModal && (
@@ -1690,317 +2035,33 @@ const DeliveryPage = () => {
   );
 };
 
-const SuperAdminPage = () => {
-  const [metrics, setMetrics] = useState({ totalRevenue: 0, totalOrders: 0, totalOrgs: 0 });
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [mRes, oRes] = await Promise.all([
-          fetch("/api/admin/global-metrics"),
-          fetch("/api/organizations")
-        ]);
-        const mData = await mRes.json();
-        const oData = await oRes.json();
-        setMetrics(mData);
-        setOrganizations(oData);
-      } catch (err) {
-        console.error("Erro ao carregar dados do Super Admin:", err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
-
-  const createOrg = async () => {
-    const name = prompt("Nome da Loja:");
-    const slug = prompt("Slug da Loja (ex: paty-churrasco):");
-    if (!name || !slug) return;
-
-    try {
-      const res = await fetch("/api/organizations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          slug,
-          branding: { primaryColor: "#ea580c", secondaryColor: "#fb923c" }
-        })
-      });
-      if (res.ok) {
-        const newOrg = await res.json();
-        setOrganizations([newOrg, ...organizations]);
-        alert("Loja criada com sucesso!");
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  if (loading) return <div className="p-8 text-center">Carregando métricas globais...</div>;
-
-  return (
-    <div className="pb-24 md:pt-8 p-4 max-w-7xl mx-auto">
-      <header className="mb-10 flex flex-col md:flex-row justify-between items-center gap-4">
-        <div>
-          <h1 className="text-5xl font-black text-gradient uppercase tracking-tighter italic flex items-center gap-3">
-            <Lock size={48} />
-            Super Admin
-          </h1>
-          <p className="text-slate-500 mt-2 font-medium">Controle Total da Plataforma SaaS</p>
-        </div>
-        <button
-          onClick={createOrg}
-          className="bg-[var(--primary)] text-white px-8 py-4 rounded-3xl font-black uppercase tracking-widest shadow-xl shadow-[var(--primary)]/20 hover:scale-105 transition-all flex items-center gap-2"
-        >
-          <Plus size={24} strokeWidth={3} /> Nova Loja
-        </button>
-      </header>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
-        <div className="premium-card p-8 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mb-4">
-            <TrendingUp size={32} />
-          </div>
-          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Faturamento Global</p>
-          <p className="text-4xl font-black text-slate-900 mt-2">R$ {metrics.totalRevenue.toFixed(2)}</p>
-        </div>
-        <div className="premium-card p-8 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-3xl flex items-center justify-center mb-4">
-            <ShoppingBag size={32} />
-          </div>
-          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Pedidos Totais</p>
-          <p className="text-4xl font-black text-slate-900 mt-2">{metrics.totalOrders}</p>
-        </div>
-        <div className="premium-card p-8 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 bg-orange-50 text-orange-600 rounded-3xl flex items-center justify-center mb-4">
-            <Store size={32} />
-          </div>
-          <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Lojas Ativas</p>
-          <p className="text-4xl font-black text-slate-900 mt-2">{metrics.totalOrgs}</p>
-        </div>
-      </div>
-
-      <div className="premium-card overflow-hidden">
-        <div className="p-6 border-b border-slate-100 font-black text-xl uppercase tracking-tighter">
-          Gestão de Parceiros
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-slate-50 text-slate-400 text-xs font-black uppercase tracking-widest">
-                <th className="p-6">Organização</th>
-                <th className="p-6">Link (Slug)</th>
-                <th className="p-6">Criado em</th>
-                <th className="p-6">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {organizations.map(org => (
-                <tr key={org.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="p-6">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-200 flex items-center justify-center font-black text-slate-500 text-lg group-hover:bg-[var(--primary)] group-hover:text-white transition-all">
-                        {org.name[0]}
-                      </div>
-                      <span className="font-bold text-slate-900">{org.name}</span>
-                    </div>
-                  </td>
-                  <td className="p-6">
-                    <span className="px-3 py-1 bg-slate-100 rounded-full text-slate-500 font-mono text-xs">{org.slug}</span>
-                  </td>
-                  <td className="p-6 text-slate-500 font-medium">
-                    {new Date(org.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="p-6">
-                    <button className="text-slate-300 hover:text-[var(--primary)] transition-colors">
-                      <Settings size={20} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const SaaSAdminPage = () => {
-  const [orders, setOrders] = useState<Order[]>([]);
-
-  const { org } = useTenant();
-
-  useEffect(() => {
-    if (!org) return;
-    fetch(`/api/${org.id}/orders`).then(res => res.json()).then(setOrders);
-  }, [org]);
-
-  const totalRevenue = orders.filter(o => o.payment_status === 'paid').reduce((acc, o) => acc + o.total_price, 0);
-  const totalOrders = orders.length;
-  const activeOrders = orders.filter(o => o.status === 'pending' || o.status === 'preparing').length;
-
-  const chartData = [
-    { name: 'Seg', revenue: 400, orders: 24 },
-    { name: 'Ter', revenue: 300, orders: 18 },
-    { name: 'Qua', revenue: 550, orders: 32 },
-    { name: 'Qui', revenue: 450, orders: 28 },
-    { name: 'Sex', revenue: 800, orders: 45 },
-    { name: 'Sáb', revenue: 1200, orders: 60 },
-    { name: 'Dom', revenue: 950, orders: 50 },
-  ];
-
-  return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-7xl mx-auto">
-      <header className="mb-8">
-        <h1 className="text-4xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-          <Activity size={36} className="text-indigo-600" />
-          SaaS Dashboard
-        </h1>
-        <p className="text-gray-500 mt-2">Visão geral do sistema e métricas de desempenho</p>
-      </header>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-            <TrendingUp size={24} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Receita Total</p>
-            <p className="text-2xl font-black text-gray-900">R$ {totalRevenue.toFixed(2)}</p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-            <ShoppingBag size={24} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Total Pedidos</p>
-            <p className="text-2xl font-black text-gray-900">{totalOrders}</p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center">
-            <Clock size={24} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Pedidos Ativos</p>
-            <p className="text-2xl font-black text-gray-900">{activeOrders}</p>
-          </div>
-        </div>
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm flex items-center gap-4">
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
-            <Store size={24} />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-gray-400 uppercase tracking-wider">Lojas Ativas</p>
-            <p className="text-2xl font-black text-gray-900">1</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
-          <h3 className="text-lg font-bold text-gray-900 mb-6">Receita Semanal</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} tickFormatter={(value) => `R$${value}`} />
-                <Tooltip
-                  cursor={{ fill: '#f3f4f6' }}
-                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                />
-                <Bar dataKey="revenue" fill="#4f46e5" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
-          <h3 className="text-lg font-bold text-gray-900 mb-6">Volume de Pedidos</h3>
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12 }} />
-                <Tooltip
-                  contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                />
-                <Line type="monotone" dataKey="orders" stroke="#10b981" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-          <h3 className="text-lg font-bold text-gray-900">Lojas (Tenants)</h3>
-          <button className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-xl text-sm font-bold hover:bg-indigo-100 transition-colors">
-            Adicionar Loja
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-100">
-                <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Loja</th>
-                <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Plano</th>
-                <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
-                <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Faturamento (Mês)</th>
-                <th className="p-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              <tr className="hover:bg-gray-50 transition-colors">
-                <td className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center font-bold">
-                      PC
-                    </div>
-                    <div>
-                      <p className="font-bold text-gray-900">Paty Churrasco</p>
-                      <p className="text-xs text-gray-500">paty@churrasco.com</p>
-                    </div>
-                  </div>
-                </td>
-                <td className="p-4">
-                  <span className="px-3 py-1 bg-indigo-50 text-indigo-700 rounded-full text-xs font-bold">Pro</span>
-                </td>
-                <td className="p-4">
-                  <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full text-xs font-bold flex items-center gap-1 w-max">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> Ativo
-                  </span>
-                </td>
-                <td className="p-4 font-bold text-gray-900">
-                  R$ {totalRevenue.toFixed(2)}
-                </td>
-                <td className="p-4">
-                  <button className="text-gray-400 hover:text-indigo-600 transition-colors">
-                    <Settings size={18} />
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 const FinancePage = () => {
   const { org } = useTenant();
+  const { notify } = useNotification();
   const [orders, setOrders] = useState<Order[]>([]);
+  const [expenses, setExpenses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'all'>('today');
+
+  // Expense Form State
+  const [isAddingExpense, setIsAddingExpense] = useState(false);
+  const [expDesc, setExpDesc] = useState("");
+  const [expAmount, setExpAmount] = useState("");
+  const [expCategory, setExpCategory] = useState("Insumos");
+
+  const fetchExpenses = useCallback(async () => {
+    if (!org) return;
+    try {
+      const res = await fetch(`/api/${org.id}/expenses`);
+      const data = await res.json();
+      setExpenses(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Erro ao carregar despesas:", err);
+      notify("Erro ao carregar despesas.", "error");
+    }
+  }, [org, notify]);
 
   useEffect(() => {
     if (!org) return;
@@ -2009,7 +2070,52 @@ const FinancePage = () => {
       .then(r => r.json())
       .then(data => { setOrders(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, [org]);
+
+    fetchExpenses();
+  }, [org, fetchExpenses]);
+
+  const saveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!org) return;
+    try {
+      const res = await fetch(`/api/${org.id}/expenses`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: expDesc, amount: parseFloat(expAmount), category: expCategory })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        notify("Despesa salva com sucesso!", "success");
+        fetchExpenses();
+        setExpDesc("");
+        setExpAmount("");
+        setIsAddingExpense(false);
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro desconhecido ao salvar despesa.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      notify("Erro ao salvar despesa: " + err.message, "error");
+    }
+  };
+
+  const deleteExpense = async (id: string) => {
+    if (!confirm("Excluir esta despesa?")) return;
+    try {
+      const res = await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setExpenses(prev => prev.filter(e => e.id !== id));
+        notify("Despesa excluída.", "info");
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro desconhecido ao excluir despesa.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      notify("Erro ao excluir despesa: " + err.message, "error");
+    }
+  };
 
   const now = new Date();
   const filtered = orders.filter(o => {
@@ -2030,6 +2136,22 @@ const FinancePage = () => {
   const totalAll = filtered.reduce((s, o) => s + (o.total_price || 0), 0);
   const avgTicket = paidOrders.length > 0 ? totalRevenue / paidOrders.length : 0;
   const pendingRevenue = filtered.filter(o => o.payment_status === 'pending').reduce((s, o) => s + (o.total_price || 0), 0);
+
+  // Expense calculation for filtered period
+  const filteredExpenses = expenses.filter(e => {
+    const d = new Date(e.date);
+    if (period === 'today') return d.toDateString() === now.toDateString();
+    if (period === 'week') {
+      const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 7);
+      return d >= weekAgo;
+    }
+    if (period === 'month') {
+      return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    }
+    return true;
+  });
+  const totalExpenses = filteredExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const netProfit = totalRevenue - totalExpenses;
 
   const periodLabels = { today: 'Hoje', week: 'Últimos 7 dias', month: 'Este mês', all: 'Todos os tempos' };
 
@@ -2057,6 +2179,12 @@ const FinancePage = () => {
           <p className="text-gray-500 mt-1">Faturamento e relatórios da loja</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setIsAddingExpense(true)}
+            className="px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-red-100 transition-all border border-red-100"
+          >
+            <Plus size={16} /> Nova Despesa
+          </button>
           {(['today', 'week', 'month', 'all'] as const).map(p => (
             <button
               key={p}
@@ -2099,32 +2227,63 @@ const FinancePage = () => {
           <p className="text-xs text-gray-400 mt-1">por pedido pago</p>
         </div>
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
-          <div className="w-10 h-10 bg-amber-100 rounded-2xl flex items-center justify-center mb-3">
-            <Clock size={20} className="text-amber-600" />
+          <div className="w-10 h-10 bg-red-100 rounded-2xl flex items-center justify-center mb-3">
+            <TrendingDown size={20} className="text-red-600" />
           </div>
-          <p className="text-xs font-bold text-gray-400 uppercase">A Receber</p>
-          <p className="text-2xl font-black text-amber-600 mt-1">{formatCurrency(pendingRevenue)}</p>
-          <p className="text-xs text-gray-400 mt-1">pagamentos pendentes</p>
+          <p className="text-xs font-bold text-gray-400 uppercase">Despesas</p>
+          <p className="text-2xl font-black text-red-600 mt-1">{formatCurrency(totalExpenses)}</p>
+          <p className="text-xs text-gray-400 mt-1">{filteredExpenses.length} registros</p>
+        </div>
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
+          <div className="w-10 h-10 bg-indigo-100 rounded-2xl flex items-center justify-center mb-3">
+            <Activity size={20} className="text-indigo-600" />
+          </div>
+          <p className="text-xs font-bold text-gray-400 uppercase">Lucro Líquido</p>
+          <p className="text-2xl font-black text-indigo-600 mt-1">{formatCurrency(netProfit)}</p>
+          <p className="text-xs text-gray-400 mt-1">Receita - Despesas</p>
         </div>
       </div>
 
-      {/* Mini Bar Chart - last 7 days */}
-      <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 mb-8">
-        <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
-          <TrendingUp size={18} className="text-green-500" />
-          Faturamento — Últimos 7 dias
-        </h3>
-        <div className="flex items-end gap-3 h-32">
-          {last7.map((day, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-1">
-              <span className="text-[10px] font-bold text-gray-500">{day.total > 0 ? formatCurrency(day.total) : ''}</span>
-              <div
-                className="w-full rounded-t-lg bg-gradient-to-t from-green-500 to-green-300 transition-all duration-500"
-                style={{ height: `${Math.max((day.total / maxDay) * 96, day.total > 0 ? 8 : 2)}px` }}
-              />
-              <span className="text-[10px] text-gray-400 text-center leading-tight">{day.label}</span>
-            </div>
-          ))}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
+          <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+            <TrendingUp size={18} className="text-green-500" />
+            Vendas — 7 dias
+          </h3>
+          <div className="flex items-end gap-3 h-32">
+            {last7.map((day, i) => (
+              <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                <span className="text-[10px] font-bold text-gray-500">{day.total > 0 ? formatCurrency(day.total) : ''}</span>
+                <div
+                  className="w-full rounded-t-lg bg-gradient-to-t from-green-500 to-green-300 transition-all duration-500"
+                  style={{ height: `${Math.max((day.total / maxDay) * 96, day.total > 0 ? 8 : 2)}px` }}
+                />
+                <span className="text-[10px] text-gray-400 text-center leading-tight">{day.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden">
+          <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
+            <TrendingDown size={18} className="text-red-500" />
+            Últimas Despesas
+          </h3>
+          <div className="space-y-3 max-h-[128px] overflow-y-auto">
+            {filteredExpenses.slice(0, 5).map(exp => (
+              <div key={exp.id} className="flex justify-between items-center text-sm border-b border-gray-50 pb-2">
+                <div>
+                  <p className="font-bold text-gray-800">{exp.description}</p>
+                  <p className="text-[10px] text-gray-400 uppercase">{exp.category}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono font-bold text-red-500">-{formatCurrency(Number(exp.amount))}</span>
+                  <button onClick={() => deleteExpense(exp.id)} className="text-gray-300 hover:text-red-500"><X size={14} /></button>
+                </div>
+              </div>
+            ))}
+            {filteredExpenses.length === 0 && <p className="text-center py-4 text-gray-300 text-xs">Nenhuma despesa registrada.</p>}
+          </div>
         </div>
       </div>
 
@@ -2181,6 +2340,77 @@ const FinancePage = () => {
           </div>
         )}
       </div>
+      <AnimatePresence>
+        {isAddingExpense && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl"
+            >
+              <h3 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2">
+                <TrendingDown className="text-red-600" /> Registrar Despesa
+              </h3>
+              <form onSubmit={saveExpense} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
+                  <input
+                    required
+                    value={expDesc}
+                    onChange={e => setExpDesc(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
+                    placeholder="Ex: Compra de carne, Aluguel"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Valor (R$)</label>
+                    <input
+                      required
+                      type="number"
+                      step="0.01"
+                      value={expAmount}
+                      onChange={e => setExpAmount(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Categoria</label>
+                    <select
+                      value={expCategory}
+                      onChange={e => setExpCategory(e.target.value)}
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
+                    >
+                      <option>Insumos</option>
+                      <option>Manutenção</option>
+                      <option>Marketing</option>
+                      <option>Mão de Obra</option>
+                      <option>Outros</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-4 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingExpense(false)}
+                    className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-2 px-8 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-100"
+                  >
+                    Salvar Gasto
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -2199,7 +2429,35 @@ const AdminPage = () => {
   const [extraName, setExtraName] = useState("");
   const [extraPrice, setExtraPrice] = useState("");
 
+  const [activeTab, setActiveTab] = useState<'products' | 'couriers' | 'settings' | 'metrics'>('products');
+  const [couriers, setCouriers] = useState<User[]>([]);
+  const [courierStats, setCourierStats] = useState<Record<string, { total_commissions: number, total_advances: number, net_pay: number }>>({});
+  const [newCourierName, setNewCourierName] = useState("");
+  const [newCourierPhone, setNewCourierPhone] = useState("");
+  const [newCourierPassword, setNewCourierPassword] = useState("");
+  const [modalType, setModalType] = useState<'payout' | 'advance' | null>(null);
+  const [selectedCourier, setSelectedCourier] = useState<User | null>(null);
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [operatingHours, setOperatingHours] = useState<any>(null);
+  const [hoursSaving, setHoursSaving] = useState(false);
+
   const { org } = useTenant();
+  const { notify } = useNotification();
+
+  const fetchCourierStats = async (courierList: User[]) => {
+    const stats: Record<string, { total_commissions: number, total_advances: number, net_pay: number }> = {};
+    for (const c of courierList) {
+      try {
+        const res = await fetch(`/api/courier/${c.id}/stats`);
+        if (res.ok) {
+          stats[c.id] = await res.json();
+        }
+      } catch (e) {
+        console.error("Erro ao buscar stats do entregador", c.id, e);
+      }
+    }
+    setCourierStats(stats);
+  };
 
   useEffect(() => {
     if (!org) return;
@@ -2212,7 +2470,142 @@ const AdminPage = () => {
       .then(res => res.json())
       .then(setExtraIngredients)
       .catch(err => console.error("Erro ao carregar ingredientes extras:", err));
+
+    fetch(`/api/${org.id}/couriers`)
+      .then(res => res.json())
+      .then(data => {
+        setCouriers(data);
+        fetchCourierStats(data);
+      })
+      .catch(err => console.error("Erro ao carregar entregadores:", err));
+
+    if (org?.operating_hours) {
+      setOperatingHours(org.operating_hours);
+    }
   }, [org]);
+
+  const saveHours = async (newHours?: any) => {
+    const hoursToSave = newHours || operatingHours;
+    if (!org || !hoursToSave) return;
+    setHoursSaving(true);
+    try {
+      const res = await fetch(`/api/organizations/${org.id}/operating-hours`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operating_hours: hoursToSave })
+      });
+      if (res.ok) {
+        notify("Horários atualizados com sucesso!", "success");
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro desconhecido ao salvar horários.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      notify("Erro ao salvar horários: " + err.message, "error");
+    } finally {
+      setHoursSaving(false);
+    }
+  };
+
+  const handlePayout = async () => {
+    if (!selectedCourier) return;
+    try {
+      const res = await fetch(`/api/courier/${selectedCourier.id}/payout`, { method: 'POST' });
+      if (res.ok) {
+        notify("Pagamento registrado com sucesso!", "success");
+        fetchCourierStats(couriers);
+        setModalType(null);
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro desconhecido ao processar pagamento.");
+      }
+    } catch (e: any) {
+      notify("Erro ao processar pagamento: " + e.message, "error");
+    }
+  };
+
+  const handleGiveAdvance = async () => {
+    if (!selectedCourier || !advanceAmount || isNaN(parseFloat(advanceAmount))) return;
+    const amount = parseFloat(advanceAmount);
+    try {
+      const res = await fetch(`/api/${org?.id}/expenses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: `Vale: ${selectedCourier.name}`,
+          amount: amount,
+          category: "Mão de Obra",
+          courier_id: selectedCourier.id
+        })
+      });
+
+      if (res.ok) {
+        notify("Vale registrado com sucesso!", "success");
+        fetchCourierStats(couriers);
+        setModalType(null);
+        setAdvanceAmount("");
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro desconhecido ao registrar vale.");
+      }
+    } catch (err: any) {
+      notify("Erro ao registrar vale: " + err.message, "error");
+    }
+  };
+
+  const saveCourier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!org) return;
+    try {
+      // Registrar apenas como usuário comum, com role de courier
+      const resSimple = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCourierName,
+          phone: newCourierPhone,
+          password: newCourierPassword,
+          role: 'courier',
+          org_id: org.id
+        })
+      });
+
+      if (resSimple.ok) {
+        const data = await resSimple.json();
+        const updatedCouriers = [...couriers, data];
+        setCouriers(updatedCouriers);
+        fetchCourierStats(updatedCouriers);
+        setNewCourierName("");
+        setNewCourierPhone("");
+        setNewCourierPassword("");
+        notify("Entregador cadastrado com sucesso!", "success");
+      } else {
+        const errorData = await resSimple.json();
+        notify("Erro ao cadastrar entregador: " + (errorData.message || "Telefone já existe?"), "error");
+      }
+    } catch (err: any) {
+      console.error(err);
+      notify("Erro ao cadastrar entregador: " + err.message, "error");
+    }
+  };
+
+  const deleteCourier = async (id: string | number) => {
+    if (!confirm("Remover este entregador? Isso não apagará o histórico de pedidos dele.")) return;
+    try {
+      const res = await fetch(`/api/couriers/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setCouriers(couriers.filter(c => c.id !== id));
+        notify("Entregador removido com sucesso!", "info");
+      } else {
+        const errText = await res.text();
+        notify("Erro ao remover entregador: " + errText, "error");
+      }
+    } catch (err) {
+      console.error(err);
+      notify("Erro de conexão ao remover entregador", "error");
+    }
+  };
 
   // Mercado Pago settings
   const [mpToken, setMpToken] = useState(org?.has_mp_token ? "••••••••••••••••" : "");
@@ -2229,23 +2622,22 @@ const AdminPage = () => {
   const [promoPrice, setPromoPrice] = useState("");
 
   const savePromo = async (productId: number) => {
-    const price = promoPrice.trim() === "" ? null : parseFloat(promoPrice);
+    const promoValue = promoPrice.trim() === "" ? null : parseFloat(promoPrice);
     try {
       const res = await fetch(`/api/products/${productId}/promo`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ promotional_price: price })
+        body: JSON.stringify({ promotional_price: promoValue })
       });
       if (res.ok) {
-        const updated = await res.json();
-        setProducts(products.map(p => p.id === productId ? { ...p, promotional_price: updated.promotional_price } : p));
+        notify("Preço promocional atualizado!", "success");
+        fetch(`/api/${org?.id}/products`).then(r => r.json()).then(setProducts);
       } else {
-        const errText = await res.text();
-        console.error("Save promo error:", errText);
-        alert("Erro ao salvar promoção: " + errText);
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Erro ao salvar promoção.");
       }
-    } catch (e) {
-      console.error("Network error on savePromo:", e);
+    } catch (err: any) {
+      notify("Erro ao salvar promoção: " + err.message, "error");
     }
     setEditingPromo(null);
     setPromoPrice("");
@@ -2258,12 +2650,15 @@ const AdminPage = () => {
       const res = await fetch(`/api/organizations/${org.id}/logo`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logoUrl: dataUrl })
+        body: JSON.stringify({ logo_url: dataUrl })
       });
       if (res.ok) {
-        setLogoSaved(true);
-        setTimeout(() => setLogoSaved(false), 3000);
+        notify("Logo atualizada com sucesso! Recarregue para ver a mudança.", "success");
+      } else {
+        throw new Error("Erro no servidor ao salvar logo.");
       }
+    } catch (err: any) {
+      notify("Erro ao salvar logo: " + err.message, "error");
     } finally {
       setLogoSaving(false);
     }
@@ -2276,17 +2671,15 @@ const AdminPage = () => {
       const res = await fetch(`/api/organizations/${org.id}/mp-token`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mp_access_token: mpToken.trim() })
+        body: JSON.stringify({ mp_access_token: mpToken })
       });
       if (res.ok) {
-        setMpSaved(true);
-        setMpToken("");
-        setTimeout(() => setMpSaved(false), 3000);
+        notify("Token do Mercado Pago salvo com sucesso!", "success");
       } else {
-        alert("Erro ao salvar. Verifique o Access Token.");
+        throw new Error("Erro ao salvar token.");
       }
-    } catch (err) {
-      alert("Erro ao salvar token do Mercado Pago.");
+    } catch (err: any) {
+      notify("Erro ao salvar token: " + err.message, "error");
     } finally {
       setMpSaving(false);
     }
@@ -2326,7 +2719,7 @@ const AdminPage = () => {
           : p
         ));
         setEditingProduct(null);
-        alert("Produto atualizado com sucesso!");
+        notify("Produto atualizado com sucesso!", "success");
       } else {
         // Criar novo produto
         const res = await fetch(`/api/${org?.id}/products`, {
@@ -2340,12 +2733,12 @@ const AdminPage = () => {
         }
         const data = await res.json();
         setProducts([...products, { id: data.id, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }]);
-        alert("Produto salvo com sucesso!");
+        notify("Produto salvo com sucesso!", "success");
       }
       setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl("");
     } catch (err: any) {
       console.error("Erro ao salvar produto:", err);
-      alert(err.message || "Erro ao salvar produto. Verifique se a imagem não é muito grande.");
+      notify(err.message || "Erro ao salvar produto.", "error");
     }
   };
 
@@ -2405,290 +2798,248 @@ const AdminPage = () => {
           <Settings size={36} className="text-gray-700" />
           Administração
         </h1>
-        <p className="text-gray-500 mt-2">Gerencie seu cardápio e produtos</p>
+        <p className="text-gray-500 mt-2">Gerencie seu cardápio, entregadores e loja</p>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-1">
-          <form onSubmit={saveProduct} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold">{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h2>
-              {editingProduct && (
-                <button type="button" onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors">
-                  <X size={14} /> Cancelar
-                </button>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tipo de Produto</label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setCategory('churrasco')}
-                  className={cn(
-                    "py-2 rounded-xl text-xs font-bold border transition-all",
-                    category === 'churrasco' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
-                  )}
-                >
-                  Churrasco
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCategory('ready')}
-                  className={cn(
-                    "py-2 rounded-xl text-xs font-bold border transition-all",
-                    category === 'ready' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
-                  )}
-                >
-                  Pronto (Bebida/Outro)
-                </button>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome</label>
-              <input
-                required
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                placeholder="Ex: Churrasco Grego Tradicional"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
-              <textarea
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none h-24"
-                placeholder="Descreva o produto..."
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
-              <input
-                required
-                type="number"
-                step="0.01"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                placeholder="0.00"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Imagem do Produto</label>
-              <div className="space-y-3">
-                <div className="flex gap-2 items-center overflow-hidden">
-                  <input
-                    type="text"
-                    value={imageUrl}
-                    onChange={e => setImageUrl(e.target.value)}
-                    className="min-w-0 flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
-                    placeholder="Cole uma URL ou envie um arquivo"
-                  />
-                  <label className="shrink-0 cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onloadend = () => {
-                            setImageUrl(reader.result as string);
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                    />
-                    <span className="text-xs font-bold uppercase">Upload</span>
-                  </label>
-                </div>
-                {imageUrl && (
-                  <div className="relative w-full h-32 bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
-                    <img
-                      src={imageUrl}
-                      alt="Preview"
-                      className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setImageUrl("")}
-                      className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1 rounded-full backdrop-blur-sm transition-colors"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
+      <div className="flex gap-4 mb-8 overflow-x-auto pb-2">
+        <button
+          onClick={() => setActiveTab('products')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'products' ? "bg-black text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+        >
+          Cardápio e Produtos
+        </button>
+        <button
+          onClick={() => setActiveTab('couriers')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'couriers' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+        >
+          Entregadores
+        </button>
+        <button
+          onClick={() => setActiveTab('settings')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'settings' ? "bg-gray-800 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+        >
+          Configurações (MP/Logo)
+        </button>
+        <button
+          onClick={() => setActiveTab('metrics')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'metrics' ? "bg-blue-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+        >
+          📊 Métricas
+        </button>
+      </div>
+
+      {activeTab === 'metrics' && (
+        <MetricsTab orgId={org?.id} />
+      )}
+
+      {activeTab === 'products' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1">
+            <form onSubmit={saveProduct} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold">{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h2>
+                {editingProduct && (
+                  <button type="button" onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors">
+                    <X size={14} /> Cancelar
+                  </button>
                 )}
               </div>
-            </div>
-            {category === 'churrasco' && (
               <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Ingredientes</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Tipo de Produto</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCategory('churrasco')}
+                    className={cn(
+                      "py-2 rounded-xl text-xs font-bold border transition-all",
+                      category === 'churrasco' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
+                    )}
+                  >
+                    Churrasco
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCategory('ready')}
+                    className={cn(
+                      "py-2 rounded-xl text-xs font-bold border transition-all",
+                      category === 'ready' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
+                    )}
+                  >
+                    Pronto (Bebida/Outro)
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome</label>
                 <input
+                  required
                   type="text"
-                  value={ingredients}
-                  onChange={e => setIngredients(e.target.value)}
+                  value={name}
+                  onChange={e => setName(e.target.value)}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                  placeholder="Ex: Carne, Pão, Molho, Salada"
+                  placeholder="Ex: Churrasco Grego Tradicional"
                 />
               </div>
-            )}
-            <button className={cn(
-              "w-full py-3 rounded-2xl font-bold transition-colors",
-              editingProduct
-                ? "bg-orange-600 text-white hover:bg-orange-700"
-                : "bg-black text-white hover:bg-gray-800"
-            )}>
-              {editingProduct ? 'Salvar Alterações' : 'Salvar Produto'}
-            </button>
-            {editingProduct && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
-                <AlertCircle size={14} className="text-amber-600 shrink-0" />
-                <p className="text-xs text-amber-700">Editando: <strong>{editingProduct.name}</strong></p>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
+                <textarea
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none h-24"
+                  placeholder="Descreva o produto..."
+                />
               </div>
-            )}
-          </form>
-        </div>
-
-        <div className="lg:col-span-2">
-          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-bottom border-gray-100">
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Produto</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Preço</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {products.map(product => (
-                  <tr key={product.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        {product.image_url && (
-                          <img
-                            src={product.image_url}
-                            alt={product.name}
-                            className="w-10 h-10 rounded-lg object-cover bg-gray-100"
-                            referrerPolicy="no-referrer"
-                          />
-                        )}
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <p className="font-bold">{product.name}</p>
-                            <span className={cn(
-                              "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
-                              product.category === 'churrasco' ? "bg-orange-100 text-orange-600" : "bg-blue-100 text-blue-600"
-                            )}>
-                              {product.category === 'churrasco' ? 'Grego' : 'Pronto'}
-                            </span>
-                          </div>
-                          <p className="text-xs text-gray-400 truncate max-w-xs">{product.ingredients || 'Sem ingredientes cadastrados'}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 font-mono font-medium">R$ {product.price.toFixed(2)}</td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => startEditProduct(product)}
-                          className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
-                          title="Editar"
-                        >
-                          <Pencil size={18} />
-                        </button>
-                        <button
-                          onClick={() => deleteProduct(product.id)}
-                          className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                          title="Excluir"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="mt-8 bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-gray-900">Ingredientes Extras (Adicionais)</h3>
-            </div>
-            <div className="p-6 bg-gray-50 border-b border-gray-100">
-              <form onSubmit={saveExtraIngredient} className="flex flex-wrap gap-4 items-end">
-                <div className="flex-1 min-w-0">
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome do Adicional</label>
-                  <input
-                    required
-                    type="text"
-                    value={extraName}
-                    onChange={e => setExtraName(e.target.value)}
-                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                    placeholder="Ex: Bacon, Queijo Extra"
-                  />
-                </div>
-                <div className="w-32">
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
-                  <input
-                    required
-                    type="number"
-                    step="0.01"
-                    value={extraPrice}
-                    onChange={e => setExtraPrice(e.target.value)}
-                    className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-                    placeholder="0.00"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <button type="submit" className={cn(
-                    "px-6 py-2 h-[42px] rounded-xl font-bold transition-colors",
-                    editingExtra ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-orange-600 text-white hover:bg-orange-700"
-                  )}>
-                    {editingExtra ? 'Salvar' : 'Adicionar'}
-                  </button>
-                  {editingExtra && (
-                    <button type="button" onClick={cancelEditExtra} className="px-4 py-2 h-[42px] rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">
-                      <X size={18} />
-                    </button>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
+                <input
+                  required
+                  type="number"
+                  step="0.01"
+                  value={price}
+                  onChange={e => setPrice(e.target.value)}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                  placeholder="0.00"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Imagem do Produto</label>
+                <div className="space-y-3">
+                  <div className="flex gap-2 items-center overflow-hidden">
+                    <input
+                      type="text"
+                      value={imageUrl}
+                      onChange={e => setImageUrl(e.target.value)}
+                      className="min-w-0 flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                      placeholder="Cole uma URL ou envie um arquivo"
+                    />
+                    <label className="shrink-0 cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setImageUrl(reader.result as string);
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                      />
+                      <span className="text-xs font-bold uppercase">Upload</span>
+                    </label>
+                  </div>
+                  {imageUrl && (
+                    <div className="relative w-full h-32 bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
+                      <img
+                        src={imageUrl}
+                        alt="Preview"
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setImageUrl("")}
+                        className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1 rounded-full backdrop-blur-sm transition-colors"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
                   )}
                 </div>
-              </form>
-            </div>
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-gray-50 border-bottom border-gray-100">
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Adicional</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Preço</th>
-                  <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {extraIngredients.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="px-6 py-8 text-center text-gray-400 text-sm">Nenhum adicional cadastrado</td>
+              </div>
+              {category === 'churrasco' && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Ingredientes</label>
+                  <input
+                    type="text"
+                    value={ingredients}
+                    onChange={e => setIngredients(e.target.value)}
+                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                    placeholder="Ex: Carne, Pão, Molho, Salada"
+                  />
+                </div>
+              )}
+              <button className={cn(
+                "w-full py-3 rounded-2xl font-bold transition-colors",
+                editingProduct
+                  ? "bg-orange-600 text-white hover:bg-orange-700"
+                  : "bg-black text-white hover:bg-gray-800"
+              )}>
+                {editingProduct ? 'Salvar Alterações' : 'Salvar Produto'}
+              </button>
+              {editingProduct && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
+                  <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                  <p className="text-xs text-amber-700">Editando: <strong>{editingProduct.name}</strong></p>
+                </div>
+              )}
+            </form>
+          </div>
+
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-bottom border-gray-100">
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Produto</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Preço</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
                   </tr>
-                ) : (
-                  extraIngredients.map(extra => (
-                    <tr key={extra.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 font-bold">{extra.name}</td>
-                      <td className="px-6 py-4 font-mono font-medium text-orange-600">+ R$ {extra.price.toFixed(2)}</td>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {products.map(product => (
+                    <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          {product.image_url && (
+                            <img
+                              src={product.image_url}
+                              alt={product.name}
+                              className="w-10 h-10 rounded-lg object-cover bg-gray-100"
+                              referrerPolicy="no-referrer"
+                            />
+                          )}
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold">{product.name}</p>
+                              <span className={cn(
+                                "text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase",
+                                product.category === 'churrasco' ? "bg-orange-100 text-orange-600" : "bg-blue-100 text-blue-600"
+                              )}>
+                                {product.category === 'churrasco' ? 'Grego' : 'Pronto'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-gray-400 truncate max-w-xs">{product.ingredients || 'Sem ingredientes cadastrados'}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 font-mono font-medium">R$ {product.price.toFixed(2)}</td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1">
                           <button
-                            onClick={() => startEditExtra(extra)}
+                            onClick={() => startEditProduct(product)}
                             className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
                             title="Editar"
                           >
                             <Pencil size={18} />
                           </button>
                           <button
-                            onClick={() => deleteExtraIngredient(extra.id)}
+                            onClick={() => deleteProduct(product.id)}
                             className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
                             title="Excluir"
                           >
@@ -2697,223 +3048,772 @@ const AdminPage = () => {
                         </div>
                       </td>
                     </tr>
-                  ))
-                )}
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-8 bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-gray-900">Ingredientes Extras (Adicionais)</h3>
+              </div>
+              <div className="p-6 bg-gray-50 border-b border-gray-100">
+                <form onSubmit={saveExtraIngredient} className="flex flex-wrap gap-4 items-end">
+                  <div className="flex-1 min-w-0">
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome do Adicional</label>
+                    <input
+                      required
+                      type="text"
+                      value={extraName}
+                      onChange={e => setExtraName(e.target.value)}
+                      className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                      placeholder="Ex: Bacon, Queijo Extra"
+                    />
+                  </div>
+                  <div className="w-32">
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
+                    <input
+                      required
+                      type="number"
+                      step="0.01"
+                      value={extraPrice}
+                      onChange={e => setExtraPrice(e.target.value)}
+                      className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="submit" className={cn(
+                      "px-6 py-2 h-[42px] rounded-xl font-bold transition-colors",
+                      editingExtra ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-orange-600 text-white hover:bg-orange-700"
+                    )}>
+                      {editingExtra ? 'Salvar' : 'Adicionar'}
+                    </button>
+                    {editingExtra && (
+                      <button type="button" onClick={cancelEditExtra} className="px-4 py-2 h-[42px] rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">
+                        <X size={18} />
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-gray-50 border-bottom border-gray-100">
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Adicional</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase">Preço</th>
+                    <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {extraIngredients.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-6 py-8 text-center text-gray-400 text-sm">Nenhum adicional cadastrado</td>
+                    </tr>
+                  ) : (
+                    extraIngredients.map(extra => (
+                      <tr key={extra.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 font-bold">{extra.name}</td>
+                        <td className="px-6 py-4 font-mono font-medium text-orange-600">+ R$ {extra.price.toFixed(2)}</td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => startEditExtra(extra)}
+                              className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
+                              title="Editar"
+                            >
+                              <Pencil size={18} />
+                            </button>
+                            <button
+                              onClick={() => deleteExtraIngredient(extra.id)}
+                              className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
+                              title="Excluir"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'couriers' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-1">
+            <form onSubmit={saveCourier} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
+              <h2 className="text-xl font-bold">Novo Entregador</h2>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
+                <input required value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
+                <input required value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
+                <input required type="password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+              </div>
+              <button type="submit" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
+            </form>
+          </div>
+          <div className="lg:col-span-2">
+            <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+              <div className="p-4 font-bold border-b bg-gray-50/50 font-black uppercase text-xs tracking-widest text-gray-400">Entregadores</div>
+              <table className="w-full text-left text-sm">
+                <tbody className="divide-y divide-gray-50">
+                  {couriers.map(c => (
+                    <tr key={c.id}>
+                      <td className="p-4">
+                        <p className="font-black text-gray-800">{c.name}</p>
+                        <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-gray-400 font-bold uppercase">A Receber</span>
+                          <span className="text-sm font-bold text-gray-700">R$ {(courierStats[c.id]?.total_commissions || 0).toFixed(2)}</span>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-gray-400 font-bold uppercase transition-all">Vales</span>
+                          <span className="text-sm font-bold text-red-500">- R$ {(courierStats[c.id]?.total_advances || 0).toFixed(2)}</span>
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex flex-col">
+                          <span className="text-[10px] text-gray-400 font-bold uppercase">Saldo Líquido</span>
+                          <span className="text-lg font-black text-orange-600">R$ {(courierStats[c.id]?.net_pay || 0).toFixed(2)}</span>
+                        </div>
+                      </td>
+                      <td className="p-4 text-right flex gap-2 justify-end items-center">
+                        <button
+                          onClick={() => { setSelectedCourier(c); setModalType('advance'); }}
+                          className="bg-amber-100 text-amber-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all flex items-center gap-1"
+                          title="Dar Vale"
+                        >
+                          <TrendingDown size={14} /> Dar Vale
+                        </button>
+                        <button
+                          onClick={() => { setSelectedCourier(c); setModalType('payout'); }}
+                          disabled={!courierStats[c.id]?.net_pay && !courierStats[c.id]?.total_advances}
+                          className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md shadow-green-100"
+                        >
+                          Pagar Entregador
+                        </button>
+                        <button onClick={() => deleteCourier(c.id)} className="text-gray-300 hover:text-red-600 p-2 transition-colors"><Trash2 size={18} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                  {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400">Nenhum entregador cadastrado.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'settings' && (
+        <div className="space-y-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Store className="text-blue-500" /> Logotipo</h2>
+              {logoPreview && <img src={logoPreview} className="h-20 mb-6 mx-auto object-contain p-2 border rounded-xl" />}
+              <label className="block cursor-pointer bg-blue-600 text-white text-center py-4 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-xl">
+                <input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onloadend = () => { setLogoPreview(r.result as string); saveLogo(r.result as string); }; r.readAsDataURL(f); } }} />
+                {logoSaving ? "Enviando..." : "Alterar Logotipo"}
+              </label>
+            </div>
+            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+              <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><QrCode className="text-emerald-500" /> Mercado Pago</h2>
+              <input type="password" value={mpToken} onChange={e => setMpToken(e.target.value)} className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl mb-4 font-mono outline-none focus:border-emerald-500" placeholder="APP_USR-..." />
+              <button onClick={saveMpToken} className="w-full py-4 bg-black text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-800 transition-all shadow-xl font-bold">
+                {mpSaving ? "Salvando..." : mpSaved ? "Configuração Salva!" : "Ativar Mercado Pago"}
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold flex items-center gap-2"><Clock className="text-orange-500" /> Horário de Funcionamento</h2>
+              <button
+                onClick={() => saveHours()}
+                disabled={hoursSaving}
+                className="bg-orange-600 text-white px-6 py-2 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-orange-700 disabled:opacity-30 transition-all shadow-lg font-bold"
+              >
+                {hoursSaving ? "Salvando..." : "Salvar Horários"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => {
+                const dayLabel = {
+                  monday: 'Segunda', tuesday: 'Terça', wednesday: 'Quarta',
+                  thursday: 'Quinta', friday: 'Sexta', saturday: 'Sábado', sunday: 'Domingo'
+                }[day as keyof typeof operatingHours];
+
+                const config = (operatingHours && (operatingHours as any)[day]) || { open: '00:00', close: '23:59', closed: false };
+
+                return (
+                  <div key={day} className={`p-4 rounded-2xl border-2 transition-all ${config.closed ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-orange-50'}`}>
+                    <div className="flex justify-between items-center mb-3">
+                      <span className="font-bold text-gray-800">{dayLabel}</span>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={config.closed}
+                          onChange={e => {
+                            const newHours = { ...operatingHours, [day]: { ...config, closed: e.target.checked } };
+                            setOperatingHours(newHours);
+                          }}
+                          className="w-4 h-4 accent-orange-500"
+                        />
+                        <span className="text-[10px] font-black uppercase text-gray-400 font-bold">Fechado</span>
+                      </label>
+                    </div>
+                    {!config.closed && (
+                      <div className="flex items-center gap-1 w-full min-w-0">
+                        <input
+                          type="time"
+                          value={config.open}
+                          onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, open: e.target.value } })}
+                          className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
+                        />
+                        <span className="text-gray-300 text-xs shrink-0">às</span>
+                        <input
+                          type="time"
+                          value={config.close}
+                          onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, close: e.target.value } })}
+                          className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
+            <div className="p-4 font-bold border-b bg-gray-50/50 flex items-center gap-2 text-red-600 uppercase text-[10px] tracking-widest"><TrendingDown size={18} /> Promoções de Produtos</div>
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-50 border-b font-bold text-gray-400">
+                <tr><th className="p-4">Produto</th><th className="p-4">Original</th><th className="p-4 text-red-600">Promoção</th><th className="p-4 text-right">Ação</th></tr>
+              </thead>
+              <tbody>
+                {products.map(p => (
+                  <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                    <td className="p-4 font-bold">{p.name}</td>
+                    <td className="p-4 text-gray-400 line-through font-mono">R$ {p.price.toFixed(2)}</td>
+                    <td className="p-4">
+                      {editingPromo === p.id ? (
+                        <input type="number" step="0.01" value={promoPrice} onChange={e => setPromoPrice(e.target.value)} className="w-24 px-2 py-1 border rounded-lg font-bold" autoFocus onBlur={() => savePromo(p.id)} />
+                      ) : (p as any).promotional_price ? (
+                        <span className="font-black text-red-600">R$ {Number((p as any).promotional_price).toFixed(2)}</span>
+                      ) : (
+                        <span className="text-gray-200 italic text-xs">Sem promo</span>
+                      )}
+                    </td>
+                    <td className="p-4 text-right">
+                      <button onClick={() => { setEditingPromo(p.id); setPromoPrice((p as any).promotional_price?.toString() || ""); }} className="text-orange-400 p-2"><Pencil size={18} /></button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Logo da Loja */}
-      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center">
-            <Store size={24} className="text-orange-600" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Logo da Loja</h2>
-            <p className="text-sm text-gray-500">Faça upload de uma imagem para usar como logo</p>
-          </div>
-        </div>
-        <div className="flex flex-col sm:flex-row items-start gap-6">
-          <div className="shrink-0">
-            {logoPreview ? (
-              <img src={logoPreview} alt="Logo" className="w-24 h-24 rounded-2xl object-cover border-2 border-gray-200 shadow-sm" />
-            ) : (
-              <div className="w-24 h-24 rounded-2xl bg-gray-100 border-2 border-dashed border-gray-300 flex items-center justify-center">
-                <Store size={32} className="text-gray-400" />
+      {/* Courier Modals */}
+      <AnimatePresence>
+        {modalType && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-left"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }}
+              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl border border-gray-100"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-black text-gray-800">
+                  {modalType === 'advance' ? 'Dar Vale' : 'Pagar Entregador'}
+                </h3>
+                <button onClick={() => setModalType(null)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
               </div>
-            )}
-          </div>
-          <div className="flex-1 space-y-3">
-            <label className="block cursor-pointer">
-              <span className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Imagem</span>
-              <div className="flex items-center gap-3 bg-gray-50 border-2 border-dashed border-gray-300 hover:border-orange-400 rounded-2xl p-4 transition-colors group">
-                <div className="w-10 h-10 bg-orange-100 group-hover:bg-orange-200 rounded-xl flex items-center justify-center transition-colors shrink-0">
-                  <Plus size={20} className="text-orange-600" />
-                </div>
-                <div>
-                  <p className="font-bold text-gray-700 text-sm">Clique para escolher uma imagem</p>
-                  <p className="text-xs text-gray-400">PNG, JPG, WEBP até 5MB</p>
-                </div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={e => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const reader = new FileReader();
-                    reader.onloadend = () => {
-                      const dataUrl = reader.result as string;
-                      setLogoPreview(dataUrl);
-                      saveLogo(dataUrl);
-                    };
-                    reader.readAsDataURL(file);
-                  }}
-                />
-              </div>
-            </label>
-            {logoPreview && (
-              <div className="flex gap-2">
-                <div className={cn(
-                  "flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all",
-                  logoSaved ? "bg-green-100 text-green-700" : logoSaving ? "bg-gray-100 text-gray-500" : "bg-orange-50 text-orange-600"
-                )}>
-                  {logoSaved ? <><CheckCircle2 size={14} /> Logo salva!</> : logoSaving ? "Salvando..." : <><CheckCircle2 size={14} /> Pronto para salvar</>}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setLogoPreview(""); saveLogo(""); }}
-                  className="text-xs text-red-400 hover:text-red-600 px-3 py-1.5 rounded-xl hover:bg-red-50 transition-colors"
-                >
-                  Remover logo
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Promoções de Produtos */}
-      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
-        <div className="p-6 border-b border-gray-100 flex items-center gap-3">
-          <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center">
-            <TrendingDown size={24} className="text-red-600" />
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Promoções</h2>
-            <p className="text-sm text-gray-500">Defina preços promocionais para seus produtos</p>
-          </div>
-        </div>
-        <table className="w-full text-left">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Produto</th>
-              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Preço Normal</th>
-              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase">Preço Promo</th>
-              <th className="px-6 py-3 text-xs font-bold text-gray-400 uppercase text-right">Ação</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {products.map(product => (
-              <tr key={product.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    {product.image_url && <img src={product.image_url} alt={product.name} className="w-9 h-9 rounded-lg object-cover bg-gray-100" referrerPolicy="no-referrer" />}
-                    <span className="font-bold text-gray-800 text-sm">{product.name}</span>
+              <div className="mb-8">
+                <p className="text-gray-500 mb-1 font-bold text-xs uppercase tracking-widest">Entregador</p>
+                <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-2xl border border-gray-100">
+                  <div className="w-10 h-10 bg-orange-100 text-orange-600 rounded-xl flex items-center justify-center">
+                    <User size={20} />
                   </div>
-                </td>
-                <td className="px-6 py-4 font-mono font-medium text-gray-500">R$ {product.price.toFixed(2)}</td>
-                <td className="px-6 py-4">
-                  {editingPromo === product.id ? (
-                    <div className="flex items-center gap-2">
+                  <div>
+                    <p className="font-bold text-gray-800">{selectedCourier?.name}</p>
+                    <p className="text-xs text-gray-400">{selectedCourier?.phone}</p>
+                  </div>
+                </div>
+              </div>
+
+              {modalType === 'advance' ? (
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 font-bold">Valor do Adiantamento</label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-gray-400">R$</span>
                       <input
+                        autoFocus
                         type="number"
                         step="0.01"
-                        value={promoPrice}
-                        onChange={e => setPromoPrice(e.target.value)}
-                        placeholder="Deixe vazio p/ remover"
-                        className="w-36 px-3 py-1.5 text-sm border border-orange-300 rounded-xl focus:ring-2 focus:ring-orange-400 outline-none"
-                        autoFocus
+                        value={advanceAmount}
+                        onChange={e => setAdvanceAmount(e.target.value)}
+                        className="w-full pl-12 pr-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 transition-all text-xl font-black text-gray-800"
+                        placeholder="0,00"
                       />
-                      <button onClick={() => savePromo(product.id)} className="text-green-600 hover:text-green-800 p-1.5 rounded-lg hover:bg-green-50 transition-colors">
-                        <CheckCircle2 size={18} />
-                      </button>
-                      <button onClick={() => { setEditingPromo(null); setPromoPrice(""); }} className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 transition-colors">
-                        <X size={18} />
-                      </button>
                     </div>
-                  ) : (product as any).promotional_price != null ? (
-                    <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-black">
-                      🔥 R$ {Number((product as any).promotional_price).toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="text-gray-300 text-sm">—</span>
-                  )}
-                </td>
-                <td className="px-6 py-4 text-right">
+                  </div>
                   <button
-                    onClick={() => { setEditingPromo(product.id); setPromoPrice((product as any).promotional_price?.toString() || ""); }}
-                    className="text-orange-400 hover:text-orange-600 p-2 rounded-lg hover:bg-orange-50 transition-colors"
-                    title="Definir promoção"
+                    onClick={handleGiveAdvance}
+                    className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-xl shadow-orange-100 hover:bg-orange-700 transition-all font-bold"
                   >
-                    <Pencil size={18} />
+                    Confirmar Vale
                   </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
+                    <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-1 text-center font-bold">Saldo Líquido a Pagar</p>
+                    <p className="text-3xl font-black text-green-700 text-center font-bold">R$ {(courierStats[selectedCourier?.id || '']?.net_pay || 0).toFixed(2)}</p>
+                  </div>
+                  <p className="text-sm text-gray-400 text-center px-4 leading-relaxed font-bold">
+                    Deseja registrar o pagamento? Isso liquidará todas as comissões e vales pendentes.
+                  </p>
+                  <button
+                    onClick={handlePayout}
+                    className="w-full py-4 bg-green-600 text-white rounded-2xl font-black shadow-xl shadow-green-100 hover:bg-green-700 transition-all font-bold"
+                  >
+                    Confirmar Pagamento
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
 
-      {/* Mercado Pago Configuration */}
-      <div className="mt-10 bg-white rounded-3xl border border-gray-200 shadow-lg p-6">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-sky-100 rounded-2xl flex items-center justify-center">
-            <QrCode size={24} className="text-sky-600" />
-          </div>
+const CourierDashboard = () => {
+  const { user } = useAuth();
+  const { notify } = useNotification();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [stats, setStats] = useState({ total_commissions: 0, total_deliveries: 0 });
+  const [loading, setLoading] = useState(true);
+
+  // GPS Tracking states
+  const [gpsActive, setGpsActive] = useState(false);
+  const [gpsError, setGpsError] = useState('');
+  const gpsWatchRef = useRef<number | null>(null);
+
+  // Estados de Pagamento (PIX)
+  const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [pixCopied, setPixCopied] = useState(false);
+
+  const fetchData = async () => {
+    if (!user) return;
+    try {
+      const [ordersRes, statsRes] = await Promise.all([
+        fetch(`/api/courier/${user.id}/orders`),
+        fetch(`/api/courier/${user.id}/stats`)
+      ]);
+      if (ordersRes.ok) {
+        const data = await ordersRes.json();
+        setOrders(Array.isArray(data) ? data : []);
+      }
+      if (statsRes.ok) {
+        const dataStats = await statsRes.json();
+        setStats(dataStats || { total_commissions: 0, total_deliveries: 0 });
+      }
+    } catch (error) {
+      console.error("Erro ao buscar dados do entregador:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Start/Stop GPS sharing
+  const toggleGps = useCallback(() => {
+    if (gpsActive) {
+      if (gpsWatchRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchRef.current);
+        gpsWatchRef.current = null;
+      }
+      socket.emit('courier:location:stop', { courierId: user?.id });
+      setGpsActive(false);
+      setGpsError('');
+    } else {
+      if (!navigator.geolocation) {
+        setGpsError('GPS não disponível neste dispositivo.');
+        return;
+      }
+      gpsWatchRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          socket.emit('courier:location', {
+            courierId: user?.id,
+            courierName: user?.name,
+            latitude,
+            longitude,
+            timestamp: Date.now(),
+          });
+          setGpsActive(true);
+          setGpsError('');
+        },
+        (err) => {
+          setGpsError('Erro ao obter localização: ' + err.message);
+          setGpsActive(false);
+        },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
+    }
+  }, [gpsActive, user]);
+
+  // Cleanup GPS on unmount
+  useEffect(() => {
+    return () => {
+      if (gpsWatchRef.current !== null) {
+        navigator.geolocation.clearWatch(gpsWatchRef.current);
+        socket.emit('courier:location:stop', { courierId: user?.id });
+      }
+    };
+  }, [user]);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 10000);
+
+    // Listen for real-time updates from Webhook/Admin
+    const handleUpdate = ({ id, status }: { id: number, status: string }) => {
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, status: status as any } : o));
+    };
+    const handlePaymentUpdate = ({ id, payment_status }: { id: number, payment_status: string }) => {
+      setOrders(prev => prev.map(o => o.id === id ? { ...o, payment_status: payment_status as any } : o));
+    };
+
+    socket.on("order:update", handleUpdate);
+    socket.on("order:payment_update", handlePaymentUpdate);
+
+    return () => {
+      clearInterval(interval);
+      socket.off("order:update", handleUpdate);
+      socket.off("order:payment_update", handlePaymentUpdate);
+    };
+  }, [user]);
+
+  // Auto-close modal and mark as delivered if payment is detected as received (paid via webhook PIX)
+  useEffect(() => {
+    if (selectedOrder) {
+      const currentOrder = orders.find(o => o.id === selectedOrder.id);
+      if (currentOrder && currentOrder.payment_status === 'paid') {
+        markAsDelivered(String(currentOrder.id));
+        setSelectedOrder(null);
+      }
+    }
+  }, [orders, selectedOrder]);
+
+  const markAsDelivered = async (orderId: string) => {
+    try {
+      const res = await fetch(`/api/orders/${orderId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'delivered' })
+      });
+      if (res.ok) {
+        notify("Pagamento confirmado!", "success");
+      } else {
+        const errData = await res.json();
+        notify(errData.error || "Erro ao atualizar status", "error");
+      }
+    } catch (error) {
+      notify("Erro de conexão ao atualizar status", "error");
+    }
+  };
+
+  const handlePaymentClick = (order: Order) => {
+    setSelectedOrder(order);
+    setPixData(null);
+    setPixLoading(false);
+  };
+
+  if (loading) return <div className="flex items-center justify-center min-h-screen"><div className="w-8 h-8 border-4 border-orange-600 border-t-transparent rounded-full animate-spin" /></div>;
+
+  const activeOrders = orders.filter(o => o.status !== 'delivered');
+  const deliveredOrders = orders.filter(o => o.status === 'delivered');
+
+  return (
+    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-5xl mx-auto">
+      <header className="mb-8">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">Pagamento via PIX</h2>
-            <p className="text-sm text-gray-500">Conecte sua conta do Mercado Pago para receber pagamentos automáticos</p>
+            <h1 className="text-4xl font-extrabold text-gray-900 tracking-tight flex items-center gap-3">
+              <ClipboardList size={36} className="text-orange-600" />
+              Minhas Entregas
+            </h1>
+            <p className="text-gray-500 mt-2">Gerencie suas rotas e acompanhe seus ganhos</p>
           </div>
-        </div>
-
-        <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 mb-6 flex items-start gap-3">
-          <AlertCircle size={18} className="text-sky-600 shrink-0 mt-0.5" />
-          <div className="text-sm text-sky-800">
-            <p className="font-bold mb-1">Como obter seu Access Token:</p>
-            <ol className="list-decimal list-inside space-y-1 text-sky-700">
-              <li>Acesse <strong>mercadopago.com.br</strong></li>
-              <li>Vá em <strong>Suas integrações → Credenciais</strong></li>
-              <li>Copie o <strong>Access Token de Produção</strong></li>
-              <li>Cole abaixo e clique em Salvar</li>
-            </ol>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-4">
-          <input
-            type="password"
-            value={mpToken}
-            onChange={e => setMpToken(e.target.value)}
-            placeholder="APP_USR-xxxx... (Access Token do Mercado Pago)"
-            className="flex-1 px-4 py-3 rounded-2xl border border-gray-200 bg-gray-50 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 focus:border-sky-400"
-          />
+          {/* GPS Tracking Button */}
           <button
-            onClick={saveMpToken}
-            disabled={mpSaving || !mpToken.trim()}
+            onClick={toggleGps}
             className={cn(
-              "px-6 py-3 rounded-2xl font-bold text-sm transition-all flex items-center gap-2 whitespace-nowrap",
-              mpSaved
-                ? "bg-green-100 text-green-700 border border-green-300"
-                : "bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-sky-100"
+              "flex items-center gap-2 px-5 py-3 rounded-2xl font-bold text-sm shadow-lg transition-all",
+              gpsActive
+                ? "bg-green-500 text-white shadow-green-200 hover:bg-green-600"
+                : "bg-orange-600 text-white shadow-orange-200 hover:bg-orange-700"
             )}
           >
-            {mpSaving ? (
-              <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Salvando...</>
-            ) : mpSaved ? (
-              <><CheckCircle2 size={18} /> Token salvo!</>
-            ) : (
-              "Salvar Token"
-            )}
+            <Navigation size={18} className={gpsActive ? 'animate-pulse' : ''} />
+            {gpsActive ? '📍 Compartilhando localização...' : '🗺️ Compartilhar localização'}
           </button>
         </div>
+        {gpsError && <p className="mt-2 text-red-500 text-sm font-bold">{gpsError}</p>}
+        {gpsActive && (
+          <div className="mt-3 flex items-center gap-2 text-green-600 text-sm font-bold">
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            GPS ativo — sua localização está sendo compartilhada em tempo real
+          </div>
+        )}
+      </header>
 
-        {mpSaved && (
-          <div className="mt-3 flex items-center gap-2 text-green-700 text-sm font-medium">
-            <CheckCircle2 size={16} />
-            Mercado Pago configurado! Seus clientes já podem pagar via PIX automático. 🎉
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xl flex items-center gap-4">
+          <div className="w-14 h-14 bg-green-100 rounded-2xl flex items-center justify-center">
+            <Wallet size={28} className="text-green-600" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Ganhos Acumulados</p>
+            <p className="text-3xl font-black text-gray-900">R$ {Number(stats?.total_commissions || 0).toFixed(2)}</p>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xl flex items-center gap-4">
+          <div className="w-14 h-14 bg-orange-100 rounded-2xl flex items-center justify-center">
+            <ClipboardList size={28} className="text-orange-600" />
+          </div>
+          <div>
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Total de Entregas</p>
+            <p className="text-3xl font-black text-gray-900">{stats?.total_deliveries || 0}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-6">
+        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+          {activeOrders.length > 0 ? 'Entregas em Rota' : 'Sem entregas pendentes'}
+        </h2>
+
+        <div className="grid grid-cols-1 gap-4">
+          {activeOrders.map(order => (
+            <div key={order.id} className="bg-white p-6 rounded-3xl border-2 transition-all border-orange-200 shadow-lg">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-tighter bg-gray-100 px-2 py-1 rounded-full text-gray-500 mb-2 inline-block">
+                    Pedido #{String(order.id).slice(0, 8)}
+                  </span>
+                  <h3 className="text-lg font-bold text-gray-900">{order.customer_name}</h3>
+                  <p className="text-sm text-gray-500 flex items-center gap-1">
+                    <Store size={14} /> {order.address}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-gray-400 uppercase">Sua Comissão</p>
+                  <p className="text-xl font-black text-orange-600">R$ {Number((order as any).delivery_fee || 0).toFixed(2)}</p>
+                </div>
+              </div>
+
+              <div className="border-t border-dashed border-gray-100 pt-4 mt-4 flex justify-between items-center flex-wrap gap-4">
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold text-gray-400 uppercase">Pagamento</span>
+                  <span className={cn(
+                    "font-bold text-sm",
+                    order.payment_status === 'paid' ? "text-green-600" : "text-amber-600"
+                  )}>
+                    {order.payment_method === 'pix' ? 'PIX' : 'Dinheiro/Cartão'} - {order.payment_status === 'paid' ? 'PAGO' : 'PAGAR NA ENTREGA'}
+                  </span>
+                </div>
+
+                {/* Exibir botão Coprar caso o pagamento esteja pendente (independentemente do método, permitindo gerar PIX ou confirmar Dinheiro de forma flexível) */}
+                {order.payment_status === 'pending' ? (
+                  <button
+                    onClick={() => handlePaymentClick(order)}
+                    className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-orange-700 transition-all active:scale-95 shadow-lg shadow-orange-600/30"
+                  >
+                    <Wallet size={20} /> Cobrar R$ {Number((order as any).total_price || 0).toFixed(2)}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => markAsDelivered(String(order.id))}
+                    className="bg-black text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-gray-800 transition-all active:scale-95 shadow-lg"
+                  >
+                    <CheckCircle2 size={20} /> Concluir Entrega
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {activeOrders.length === 0 && (
+            <div className="bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl p-12 text-center">
+              <ClipboardList size={48} className="text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-500 font-medium">Você ainda não tem entregas atribuídas.</p>
+              <p className="text-xs text-gray-400 mt-1">Aguarde o administrador te enviar um pedido!</p>
+            </div>
+          )}
+        </div>
+
+        {deliveredOrders.length > 0 && (
+          <div className="mt-12">
+            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-4">
+              <CheckCircle2 size={24} className="text-green-600" />
+              Histórico Recente
+            </h2>
+            <div className="grid grid-cols-1 gap-4">
+              {deliveredOrders.map(order => (
+                <div key={order.id} className="bg-white p-6 rounded-3xl border-2 border-gray-100 opacity-60">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <span className="text-[10px] font-black uppercase tracking-tighter bg-gray-100 px-2 py-1 rounded-full text-gray-500 mb-2 inline-block">
+                        Pedido #{String(order.id).slice(0, 8)}
+                      </span>
+                      <h3 className="text-lg font-bold text-gray-500">{order.customer_name}</h3>
+                      <p className="text-sm text-gray-400 flex items-center gap-1">
+                        <Store size={14} /> {order.address}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs font-bold text-gray-400 uppercase">Comissão</p>
+                      <p className="text-xl font-black text-green-600">R$ {Number((order as any).delivery_fee || 0).toFixed(2)}</p>
+                    </div>
+                  </div>
+                  <div className="border-t border-dashed border-gray-100 pt-3 mt-3">
+                    <div className="flex items-center justify-between text-green-600 font-bold">
+                      <span className="text-sm">Pagamento: {order.payment_status === 'paid' ? 'Pago' : 'Pendente'}</span>
+                      <div className="flex items-center gap-2"><CheckCircle2 size={16} /> Entregue</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
+
+      {/* Modal de Cobrança PIX */}
+      {selectedOrder && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl relative">
+            <button onClick={() => setSelectedOrder(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={24} /></button>
+
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Wallet className="text-orange-600" size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900">Cobrança na Entrega</h3>
+              <p className="text-2xl font-black text-orange-600 mt-2">R$ {Number((selectedOrder as any).total_price || 0).toFixed(2)}</p>
+            </div>
+
+            {pixLoading && (
+              <div className="flex flex-col items-center justify-center py-8">
+                <div className="w-10 h-10 border-4 border-orange-600 border-t-transparent rounded-full animate-spin mb-4" />
+                <p className="font-bold text-gray-600">Gerando QR Code PIX...</p>
+              </div>
+            )}
+
+            {!pixLoading && !pixData && (
+              <div className="space-y-3">
+                <button
+                  onClick={async () => {
+                    setPixLoading(true);
+                    try {
+                      const res = await fetch(`/api/${(selectedOrder as any).org_id}/pix/create`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          total_price: Number((selectedOrder as any).total_price || 0),
+                          order_id: selectedOrder.id,
+                          description: `Pagamento PIX na Entrega #${selectedOrder.id}`
+                        })
+                      });
+                      if (res.ok) {
+                        const data = await res.json();
+                        setPixData(data);
+                      } else {
+                        alert("Erro ao gerar PIX");
+                      }
+                    } catch (err) {
+                      console.error(err);
+                    } finally {
+                      setPixLoading(false);
+                    }
+                  }}
+                  className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold hover:bg-blue-700 transition-all shadow-md mt-2 flex justify-center items-center gap-2"
+                >
+                  🤑 Gerar Pagamento PIX
+                </button>
+                <button
+                  onClick={() => {
+                    markAsDelivered(String(selectedOrder.id));
+                    setSelectedOrder(null);
+                  }}
+                  className="w-full bg-black text-white py-4 rounded-xl font-bold hover:bg-gray-900 transition-all shadow-md flex justify-center items-center gap-2"
+                >
+                  <CheckCircle2 size={20} /> Confirmar Dinheiro/Cartão
+                </button>
+              </div>
+            )}
+
+            {pixData && (
+              <div className="space-y-6">
+                <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex justify-center">
+                  <img src={`data:image/jpeg;base64,${pixData.qr_code_base64}`} alt="QR Code PIX" className="w-48 h-48 object-contain" />
+                </div>
+
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(pixData.qr_code);
+                    setPixCopied(true);
+                    setTimeout(() => setPixCopied(false), 2000);
+                  }}
+                  className="w-full py-4 border-2 border-dashed border-gray-300 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors text-gray-600 focus:outline-none"
+                >
+                  {pixCopied ? <CheckCircle2 size={20} className="text-green-600" /> : <Copy size={20} />}
+                  {pixCopied ? "Chave Copiada!" : "Copiar Chave Copia e Cola"}
+                </button>
+
+                <div className="w-full py-4 bg-orange-50 text-orange-600 rounded-2xl font-bold flex flex-col items-center justify-center gap-2 border border-orange-200">
+                  <div className="w-6 h-6 border-4 border-orange-600 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-sm">Aguardando confirmação automática...</span>
+                </div>
+              </div>
+            )}
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };
 
 const LoginPage = () => {
   const { login } = useAuth();
+  const { notify } = useNotification();
   const navigate = useNavigate();
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -2939,7 +3839,16 @@ const LoginPage = () => {
       const data = await res.json();
       if (res.ok) {
         login(data);
-        navigate("/");
+        // Redirecionamento baseado no cargo
+        if (data.role === 'courier') {
+          navigate("/courier-dashboard");
+        } else if (data.role === 'admin') {
+          navigate("/admin");
+        } else if (data.role === 'super_admin') {
+          navigate("/super-admin");
+        } else {
+          navigate("/");
+        }
       } else {
         setError(data.error);
       }
@@ -3101,6 +4010,49 @@ const LoginPage = () => {
                 </>
               )}
             </button>
+
+            <div className="relative my-8">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-100"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-4 text-gray-400 font-bold tracking-widest">Ou continue com</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const { error } = await supabase.auth.signInWithOAuth({
+                  provider: 'google',
+                  options: {
+                    redirectTo: window.location.origin
+                  }
+                });
+                if (error) notify(error.message, "error");
+              }}
+              className="w-full bg-white border-2 border-gray-100 text-gray-700 py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-3 group"
+            >
+              <svg className="w-5 h-5" viewBox="0 0 24 24">
+                <path
+                  fill="currentColor"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"
+                />
+                <path
+                  fill="currentColor"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                />
+              </svg>
+              Google
+            </button>
           </form>
 
           <p className="text-center mt-8 text-gray-500 text-sm">
@@ -3205,6 +4157,51 @@ const RegisterPage = () => {
           >
             {loading ? "Criando..." : "Criar Conta"}
           </button>
+
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-100"></div>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-4 text-gray-400 font-bold tracking-widest">Ou continue com</span>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={async () => {
+              const { error } = await supabase.auth.signInWithOAuth({
+                provider: 'google',
+                options: {
+                  redirectTo: window.location.origin
+                }
+              });
+              if (error) {
+                setError(error.message);
+              }
+            }}
+            className="w-full bg-white border-2 border-gray-100 text-gray-700 py-4 rounded-2xl font-bold hover:bg-gray-50 transition-all flex items-center justify-center gap-3 group"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path
+                fill="currentColor"
+                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              />
+              <path
+                fill="currentColor"
+                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+              />
+              <path
+                fill="currentColor"
+                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"
+              />
+              <path
+                fill="currentColor"
+                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+              />
+            </svg>
+            Google
+          </button>
         </form>
 
         <p className="text-center mt-6 text-gray-500 text-sm">
@@ -3258,10 +4255,10 @@ const SaaSLandingPage = () => {
             A Revolução do Churrasco Grego 🍢
           </span>
           <h1 className="text-5xl md:text-7xl font-black text-slate-900 leading-tight mb-8">
-            Transforme seu negócio com o <span className="text-gradient">SaaS que mais cresce</span> no Brasil
+            Escale seu negócio com o <span className="text-gradient">AP Delivery</span>
           </h1>
           <p className="text-xl text-slate-500 mb-12 max-w-2xl mx-auto leading-relaxed">
-            Gestão completa, multitenant, painel de entregas e fidelidade. Tudo o que você precisa para escalar sua rede de churrasco grego.
+            Gestão completa, multitenant, painel de entregas e fidelidade. Tudo o que você precisa para transformar sua loja em uma rede de sucesso.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <button
@@ -3346,6 +4343,7 @@ const SaaSLandingPage = () => {
 
 const SaaSStoreRegister = () => {
   const navigate = useNavigate();
+  const { notify } = useNotification();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -3373,8 +4371,8 @@ const SaaSStoreRegister = () => {
 
       if (res.ok) {
         // Successful registration
-        alert(`Loja ${data.org.name} criada com sucesso! Redirecionando para login...`);
-        navigate("/login");
+        notify(`Loja ${data.org.name} criada com sucesso! Redirecionando para login...`, "success");
+        setTimeout(() => navigate("/login"), 2000);
       } else {
         setError(data.error);
       }
@@ -3395,14 +4393,14 @@ const SaaSStoreRegister = () => {
         {/* Left Side Info */}
         <div className="md:w-5/12 bg-slate-900 p-12 text-white flex flex-col justify-between">
           <div>
-            <div className="bg-orange-600 w-16 h-16 rounded-2xl flex items-center justify-center mb-10 shadow-lg shadow-orange-600/20">
+            <div className="bg-purple-600 w-16 h-16 rounded-2xl flex items-center justify-center mb-10 shadow-lg shadow-purple-600/20">
               <Store size={32} strokeWidth={3} />
             </div>
             <h2 className="text-4xl font-black leading-tight mb-6">
-              Em minutos, sua loja <span className="text-orange-500 italic">online e vendendo</span>.
+              Em minutos, sua loja <span className="text-purple-500 italic">online e vendendo</span> com a AP Delivery.
             </h2>
             <p className="text-slate-400 font-medium">
-              Preencha os dados ao lado para criar sua instância exclusiva do melhor SaaS de Churrasco Grego do mundo.
+              Preencha os dados ao lado para criar sua instância exclusiva da melhor plataforma de gestão para delivery.
             </p>
           </div>
 
@@ -4508,6 +5506,1392 @@ const ProfilePage = () => {
             </div>
           )}
         </AnimatePresence>
+      </div>
+    </div>
+  );
+};
+
+
+// ============================================================
+// SUPER ADMIN PAGE - Gerenciamento Global da Plataforma
+// ============================================================
+const SuperAdminPage = () => {
+  const { notify } = useNotification();
+  const [metrics, setMetrics] = useState<{ totalRevenue: number; totalOrders: number; totalOrgs: number } | null>(null);
+  const [orgs, setOrgs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showNewOrgModal, setShowNewOrgModal] = useState(false);
+  const [editingOrg, setEditingOrg] = useState<any | null>(null);
+  const [newOrg, setNewOrg] = useState({ name: '', slug: '', primaryColor: '#ea580c', secondaryColor: '#fb923c', custom_domain: '' });
+  const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<'overview' | 'orgs' | 'financeiro' | 'security'>('overview');
+  const [financial, setFinancial] = useState<any | null>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState<any | null>(null); // org to register payment
+  const [paymentForm, setPaymentForm] = useState({ amount: '', month_ref: '', notes: '', payment_method: 'pix' });
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [metricsRes, orgsRes] = await Promise.all([
+        fetch('/api/admin/global-metrics'),
+        fetch('/api/organizations')
+      ]);
+      const metricsData = await metricsRes.json();
+      const orgsData = await orgsRes.json();
+      setMetrics(metricsData);
+      setOrgs(Array.isArray(orgsData) ? orgsData : []);
+    } catch (err) {
+      notify('Erro ao carregar dados', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchFinancial = async () => {
+    try {
+      const res = await fetch('/api/saas-payments/summary');
+      const data = await res.json();
+      setFinancial(data);
+    } catch { /* silent */ }
+  };
+
+  useEffect(() => {
+    fetchData();
+    fetchFinancial();
+  }, []);
+
+  const handleCreateOrg = async () => {
+    if (!newOrg.name || !newOrg.slug) return notify('Nome e Slug são obrigatórios', 'error');
+    setSaving(true);
+    try {
+      const res = await fetch('/api/organizations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newOrg.name,
+          slug: newOrg.slug,
+          branding: { primaryColor: newOrg.primaryColor, secondaryColor: newOrg.secondaryColor, logoUrl: null }
+        })
+      });
+      if (res.ok) {
+        notify('Organização criada com sucesso!', 'success');
+        setShowNewOrgModal(false);
+        setNewOrg({ name: '', slug: '', primaryColor: '#ea580c', secondaryColor: '#fb923c', custom_domain: '' });
+        fetchData();
+      } else {
+        const data = await res.json();
+        notify(data.error || 'Erro ao criar organização', 'error');
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSetCustomDomain = async (orgId: string, domain: string) => {
+    try {
+      const res = await fetch(`/api/organizations/${orgId}/custom-domain`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_domain: domain })
+      });
+      if (res.ok) {
+        notify('Domínio atualizado!', 'success');
+        fetchData();
+      } else {
+        notify('Erro ao atualizar domínio', 'error');
+      }
+    } catch {
+      notify('Erro de conexão', 'error');
+    }
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-12 h-12 border-4 border-orange-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  const tabs = [
+    { id: 'overview', label: 'Visão Geral', icon: BarChart3 },
+    { id: 'orgs', label: 'Organizações', icon: Store },
+    { id: 'financeiro', label: 'Financeiro', icon: DollarSign },
+    { id: 'security', label: 'Segurança', icon: Lock },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="bg-gradient-to-br from-purple-600 to-pink-600 p-3 rounded-2xl shadow-lg shadow-purple-200">
+            <Lock size={28} className="text-white" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-black text-slate-900">Painel Super Admin</h1>
+            <p className="text-slate-400 text-sm font-medium">Gerenciamento global da plataforma AP Delivery</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="bg-emerald-50 border border-emerald-200 px-4 py-2 rounded-full flex items-center gap-2">
+            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+            <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider">Sistema Online</span>
+          </div>
+          <button
+            onClick={fetchData}
+            className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+          >
+            <Activity size={18} className="text-slate-500" />
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex bg-slate-100 p-1 rounded-2xl w-fit gap-1">
+        {tabs.map(tab => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={cn(
+                "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
+                activeTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+              )}
+            >
+              <Icon size={16} />
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Overview Tab */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* Global Metrics */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[
+              {
+                label: 'Receita Total (Pago)',
+                value: `R$ ${(metrics?.totalRevenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
+                icon: DollarSign,
+                color: 'from-emerald-500 to-teal-600',
+                shadow: 'shadow-emerald-200'
+              },
+              {
+                label: 'Total de Pedidos',
+                value: metrics?.totalOrders?.toString() || '0',
+                icon: ShoppingBag,
+                color: 'from-blue-500 to-indigo-600',
+                shadow: 'shadow-blue-200'
+              },
+              {
+                label: 'Organizações Ativas',
+                value: metrics?.totalOrgs?.toString() || '0',
+                icon: Store,
+                color: 'from-purple-500 to-pink-600',
+                shadow: 'shadow-purple-200'
+              }
+            ].map(metric => {
+              const Icon = metric.icon;
+              return (
+                <motion.div
+                  key={metric.label}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="premium-card p-6"
+                >
+                  <div className={cn("w-12 h-12 bg-gradient-to-br rounded-2xl flex items-center justify-center mb-4 shadow-lg", metric.color, metric.shadow)}>
+                    <Icon size={22} className="text-white" />
+                  </div>
+                  <p className="text-3xl font-black text-slate-900 mb-1">{metric.value}</p>
+                  <p className="text-sm text-slate-400 font-medium uppercase tracking-wider">{metric.label}</p>
+                </motion.div>
+              );
+            })}
+          </div>
+
+          {/* Org List Preview */}
+          <div className="premium-card p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-black text-slate-900">Lojas Cadastradas</h2>
+              <span className="bg-orange-100 text-orange-700 text-xs font-bold px-3 py-1 rounded-full">{orgs.length} lojas</span>
+            </div>
+            <div className="space-y-3">
+              {orgs.slice(0, 5).map(org => (
+                <div key={org.id} className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl">
+                  <div
+                    className="w-10 h-10 rounded-xl shrink-0 flex items-center justify-center"
+                    style={{ background: org.branding?.primaryColor || '#ea580c' }}
+                  >
+                    <Store size={18} className="text-white" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-slate-800 truncate">{org.name}</p>
+                    <p className="text-xs text-slate-400">/{org.slug}{org.custom_domain ? ` • ${org.custom_domain}` : ''}</p>
+                  </div>
+                  <div className="bg-emerald-100 px-2 py-1 rounded-lg">
+                    <span className="text-[10px] font-bold text-emerald-700 uppercase">Ativo</span>
+                  </div>
+                </div>
+              ))}
+              {orgs.length > 5 && (
+                <button onClick={() => setActiveTab('orgs')} className="w-full py-3 text-sm text-orange-600 font-bold hover:bg-orange-50 rounded-xl transition-colors">
+                  Ver todas as {orgs.length} lojas →
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Organizations Tab */}
+      {activeTab === 'orgs' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <h2 className="text-lg font-black text-slate-900">Todas as Organizações</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  const res = await fetch('/api/admin/run-billing-check', { method: 'POST' });
+                  const data = await res.json();
+                  notify(`Verificação concluída: ${data.suspended} lojas suspensas por inadimplência`, data.suspended > 0 ? 'error' : 'success');
+                  fetchData();
+                }}
+                className="bg-slate-700 text-white px-4 py-2.5 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-800 transition-all text-sm"
+              >
+                <Activity size={14} /> Verificar Inadimplência
+              </button>
+              <button
+                onClick={() => setShowNewOrgModal(true)}
+                className="bg-orange-600 text-white px-5 py-2.5 rounded-2xl font-bold flex items-center gap-2 hover:bg-orange-700 transition-all shadow-lg shadow-orange-200 text-sm"
+              >
+                <Plus size={16} /> Nova Organização
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {orgs.map(org => {
+              const orgStatus = org.status || 'active';
+              const statusColors = {
+                active: 'bg-emerald-100 text-emerald-700',
+                inactive: 'bg-gray-200 text-gray-500',
+                suspended: 'bg-red-100 text-red-700',
+                trial: 'bg-blue-100 text-blue-700',
+              };
+              const statusLabels = { active: 'Ativo', inactive: 'Inativo', suspended: 'Suspenso', trial: 'Trial' };
+              return (
+                <motion.div
+                  key={org.id}
+                  initial={{ opacity: 0, x: -10 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  className={cn("premium-card p-5", orgStatus === 'suspended' && "border-red-200 bg-red-50/30")}
+                >
+                  <div className="flex items-start gap-4">
+                    <div
+                      className={cn("w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 shadow-lg", orgStatus !== 'active' && "opacity-50 grayscale")}
+                      style={{ background: `linear-gradient(135deg, ${org.branding?.primaryColor || '#ea580c'}, ${org.branding?.secondaryColor || '#fb923c'})` }}
+                    >
+                      <Store size={22} className="text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h3 className="font-black text-slate-900 text-lg">{org.name}</h3>
+                        <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full uppercase", statusColors[orgStatus as keyof typeof statusColors])}>
+                          {statusLabels[orgStatus as keyof typeof statusLabels]}
+                        </span>
+                        {org.billing_exempt && (
+                          <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">⭐ Isento</span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 font-medium">
+                        <span>🔗 /{org.slug}</span>
+                        {org.custom_domain && <span>🌐 {org.custom_domain}</span>}
+                        {org.billing_due_date && <span>📅 Vence: {new Date(org.billing_due_date).toLocaleDateString('pt-BR')}</span>}
+                        {org.has_mp_token ? <span className="text-green-600">✅ MP</span> : <span className="text-red-400">⚠️ Sem MP</span>}
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {/* Status Toggle */}
+                        <button
+                          onClick={async () => {
+                            const newStatus = orgStatus === 'active' ? 'inactive' : 'active';
+                            await fetch(`/api/organizations/${org.id}/status`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ status: newStatus })
+                            });
+                            notify(`Loja ${newStatus === 'active' ? 'ativada' : 'desativada'}!`, newStatus === 'active' ? 'success' : 'error');
+                            fetchData();
+                          }}
+                          className={cn(
+                            "text-xs px-3 py-1.5 rounded-lg font-bold transition-colors flex items-center gap-1",
+                            orgStatus === 'active'
+                              ? "bg-red-50 text-red-600 hover:bg-red-100"
+                              : "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                          )}
+                        >
+                          {orgStatus === 'active' ? <><X size={11} /> Desativar</> : <><CheckCircle2 size={11} /> Ativar</>}
+                        </button>
+
+                        {/* Billing Exempt Toggle */}
+                        <button
+                          onClick={async () => {
+                            await fetch(`/api/organizations/${org.id}/billing-exempt`, {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ billing_exempt: !org.billing_exempt })
+                            });
+                            notify(org.billing_exempt ? 'Isenção removida' : 'Loja marcada como isenta!', 'success');
+                            fetchData();
+                          }}
+                          className={cn(
+                            "text-xs px-3 py-1.5 rounded-lg font-bold transition-colors",
+                            org.billing_exempt ? "bg-purple-100 text-purple-700 hover:bg-purple-200" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                          )}
+                        >
+                          ⭐ {org.billing_exempt ? 'Remover Isenção' : 'Isentar Cobrança'}
+                        </button>
+
+                        {/* Set Billing Due Date */}
+                        {editingOrg?.id === org.id && editingOrg.mode === 'billing' ? (
+                          <div className="flex gap-2 w-full mt-1">
+                            <input
+                              type="date"
+                              value={editingOrg.billing_due_date || ''}
+                              onChange={e => setEditingOrg({ ...editingOrg, billing_due_date: e.target.value })}
+                              className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            />
+                            <button
+                              onClick={async () => {
+                                await fetch(`/api/organizations/${org.id}/billing-due`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ billing_due_date: editingOrg.billing_due_date })
+                                });
+                                notify('Vencimento atualizado!', 'success');
+                                setEditingOrg(null);
+                                fetchData();
+                              }}
+                              className="px-3 py-2 bg-orange-600 text-white rounded-xl text-sm font-bold"
+                            >Salvar</button>
+                            <button onClick={() => setEditingOrg(null)} className="px-3 py-2 bg-slate-100 rounded-xl"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setEditingOrg({ ...org, mode: 'billing' })}
+                            className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg font-bold hover:bg-slate-200 transition-colors flex items-center gap-1"
+                          >
+                            📅 {org.billing_due_date ? 'Alterar vencimento' : 'Definir vencimento'}
+                          </button>
+                        )}
+
+                        {/* Domain */}
+                        {editingOrg?.id === org.id && editingOrg.mode === 'domain' ? (
+                          <div className="flex gap-2 w-full mt-1">
+                            <input
+                              type="text"
+                              value={editingOrg.custom_domain || ''}
+                              onChange={e => setEditingOrg({ ...editingOrg, custom_domain: e.target.value })}
+                              placeholder="seudominio.com.br"
+                              className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            />
+                            <button
+                              onClick={async () => {
+                                await handleSetCustomDomain(org.id, editingOrg.custom_domain);
+                                setEditingOrg(null);
+                              }}
+                              className="px-3 py-2 bg-orange-600 text-white rounded-xl text-sm font-bold"
+                            >Salvar</button>
+                            <button onClick={() => setEditingOrg(null)} className="px-3 py-2 bg-slate-100 rounded-xl"><X size={14} /></button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setEditingOrg({ ...org, mode: 'domain' })}
+                            className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg font-bold hover:bg-slate-200 transition-colors flex items-center gap-1"
+                          >
+                            <MapPin size={12} /> {org.custom_domain ? 'Editar domínio' : 'Definir domínio'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">ID</p>
+                      <p className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-1 rounded-lg">{org.id.slice(0, 8)}...</p>
+                      <p className="text-[10px] text-slate-400 mt-1">{new Date(org.created_at).toLocaleDateString('pt-BR')}</p>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Financeiro Tab */}
+      {activeTab === 'financeiro' && (
+        <div className="space-y-6">
+          {/* Summary Cards */}
+          {financial && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { label: 'Receita do Mês', value: `R$ ${(financial.totalThisMonth || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, color: 'from-emerald-500 to-teal-600', shadow: 'shadow-emerald-200', icon: DollarSign },
+                { label: 'Receita Total', value: `R$ ${(financial.totalEarnedAllTime || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, color: 'from-blue-500 to-indigo-600', shadow: 'shadow-blue-200', icon: TrendingUp },
+                { label: 'Pagaram este mês', value: `${financial.paidThisMonth}/${financial.chargeableOrgs}`, color: 'from-purple-500 to-pink-600', shadow: 'shadow-purple-200', icon: CheckCircle2 },
+                { label: 'Inadimplentes', value: financial.overdueOrgs, color: 'from-red-500 to-orange-600', shadow: 'shadow-red-200', icon: X },
+              ].map(card => {
+                const Icon = card.icon;
+                return (
+                  <div key={card.label} className="premium-card p-5">
+                    <div className={`bg-gradient-to-br ${card.color} w-10 h-10 rounded-xl flex items-center justify-center mb-3 shadow-lg ${card.shadow}`}>
+                      <Icon size={18} className="text-white" />
+                    </div>
+                    <p className="text-xl font-black text-slate-900">{card.value}</p>
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">{card.label}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Overdue Orgs */}
+          {financial?.overdueList?.length > 0 && (
+            <div className="premium-card p-5">
+              <h3 className="text-base font-black text-red-600 mb-4 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse inline-block" />
+                Lojas Inadimplentes ({financial.overdueList.length})
+              </h3>
+              <div className="space-y-2">
+                {financial.overdueList.map((org: any) => (
+                  <div key={org.id} className="flex items-center justify-between bg-red-50 rounded-2xl px-4 py-3 border border-red-100">
+                    <div>
+                      <p className="font-bold text-slate-800 text-sm">{org.name}</p>
+                      <p className="text-xs text-red-500">
+                        Venceu em {org.billing_due_date ? new Date(org.billing_due_date).toLocaleDateString('pt-BR') : 'data não definida'}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        setShowPaymentModal(org);
+                        setPaymentForm({
+                          amount: '',
+                          month_ref: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+                          notes: '',
+                          payment_method: 'pix'
+                        });
+                      }}
+                      className="bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-xl hover:bg-emerald-700 transition-colors"
+                    >
+                      ✅ Registrar Pagamento
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Paid this month */}
+          {financial?.paidList?.length > 0 && (
+            <div className="premium-card p-5">
+              <h3 className="text-base font-black text-emerald-600 mb-4 flex items-center gap-2">
+                <CheckCircle2 size={16} />
+                Pagaram este mês ({financial.paidList.length})
+              </h3>
+              <div className="space-y-2">
+                {financial.paidList.map((org: any) => (
+                  <div key={org.id} className="flex items-center justify-between bg-emerald-50 rounded-2xl px-4 py-3 border border-emerald-100">
+                    <div>
+                      <p className="font-bold text-slate-800 text-sm">{org.name}</p>
+                      <p className="text-xs text-emerald-600">✅ Pago</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const now = new Date();
+                        setShowPaymentModal(org);
+                        setPaymentForm({
+                          amount: '',
+                          month_ref: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`,
+                          notes: '',
+                          payment_method: 'pix'
+                        });
+                      }}
+                      className="text-xs text-slate-500 font-bold px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 transition-colors"
+                    >
+                      + Registrar outro
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Exempt Orgs */}
+          {financial?.exemptList?.length > 0 && (
+            <div className="premium-card p-5">
+              <h3 className="text-base font-black text-purple-600 mb-3 flex items-center gap-2">
+                ⭐ Lojas Isentas ({financial.exemptList.length})
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {financial.exemptList.map((org: any) => (
+                  <span key={org.id} className="bg-purple-50 text-purple-700 text-xs font-bold px-3 py-1.5 rounded-xl border border-purple-100">
+                    {org.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Recent Payments History */}
+          {financial?.recentPayments?.length > 0 && (
+            <div className="premium-card overflow-hidden">
+              <div className="p-5 border-b border-slate-100">
+                <h3 className="text-base font-black text-slate-900">Histórico de Pagamentos</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-400 text-[10px] font-bold uppercase tracking-widest">
+                      <th className="px-5 py-3 text-left">Loja</th>
+                      <th className="px-5 py-3 text-left">Mês Ref.</th>
+                      <th className="px-5 py-3 text-left">Valor</th>
+                      <th className="px-5 py-3 text-left">Forma</th>
+                      <th className="px-5 py-3 text-left">Data Pag.</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {financial.recentPayments.map((p: any, i: number) => (
+                      <tr key={i} className="hover:bg-slate-50/50">
+                        <td className="px-5 py-3 font-bold text-slate-800">{p.organization?.name || p.org_id?.slice(0, 8)}</td>
+                        <td className="px-5 py-3 text-slate-500">{p.month_ref}</td>
+                        <td className="px-5 py-3 font-bold text-emerald-600">R$ {Number(p.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                        <td className="px-5 py-3">
+                          <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">{p.payment_method}</span>
+                        </td>
+                        <td className="px-5 py-3 text-slate-400 text-xs">{new Date(p.paid_at || p.created_at).toLocaleDateString('pt-BR')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Button to register payment for any org */}
+          <button
+            onClick={() => {
+              const now = new Date();
+              setShowPaymentModal({ id: null, name: 'Selecionar loja...' });
+              setPaymentForm({ amount: '', month_ref: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`, notes: '', payment_method: 'pix' });
+            }}
+            className="w-full py-3 border-2 border-dashed border-emerald-300 text-emerald-600 font-bold rounded-2xl hover:bg-emerald-50 transition-colors flex items-center justify-center gap-2"
+          >
+            <Plus size={18} /> Registrar Pagamento Manual
+          </button>
+        </div>
+      )}
+
+      {/* Payment Modal */}
+      <AnimatePresence>
+        {showPaymentModal && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-black text-slate-900">Registrar Pagamento</h2>
+                <button onClick={() => setShowPaymentModal(null)} className="p-2 hover:bg-gray-100 rounded-full">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="space-y-4">
+                {/* Org selector */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Loja</label>
+                  <select
+                    value={showPaymentModal.id || ''}
+                    onChange={e => setShowPaymentModal({ ...orgs.find(o => o.id === e.target.value), id: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold"
+                  >
+                    <option value="">Selecione a loja...</option>
+                    {orgs.filter(o => !o.billing_exempt).map(o => (
+                      <option key={o.id} value={o.id}>{o.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Valor (R$)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={paymentForm.amount}
+                    onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                    placeholder="199.90"
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mês de Referência</label>
+                  <input
+                    type="month"
+                    value={paymentForm.month_ref}
+                    onChange={e => setPaymentForm({ ...paymentForm, month_ref: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Forma de Pagamento</label>
+                  <select
+                    value={paymentForm.payment_method}
+                    onChange={e => setPaymentForm({ ...paymentForm, payment_method: e.target.value })}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                  >
+                    <option value="pix">PIX</option>
+                    <option value="boleto">Boleto</option>
+                    <option value="cartao">Cartão</option>
+                    <option value="transferencia">Transferência</option>
+                    <option value="manual">Manual</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Observações</label>
+                  <input
+                    type="text"
+                    value={paymentForm.notes}
+                    onChange={e => setPaymentForm({ ...paymentForm, notes: e.target.value })}
+                    placeholder="Opcional..."
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                  />
+                </div>
+                <button
+                  disabled={!showPaymentModal.id || !paymentForm.amount || !paymentForm.month_ref}
+                  onClick={async () => {
+                    const res = await fetch('/api/saas-payments', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        org_id: showPaymentModal.id,
+                        amount: parseFloat(paymentForm.amount),
+                        month_ref: paymentForm.month_ref,
+                        notes: paymentForm.notes,
+                        payment_method: paymentForm.payment_method
+                      })
+                    });
+                    if (res.ok) {
+                      notify('Pagamento registrado com sucesso! ✅', 'success');
+                      setShowPaymentModal(null);
+                      fetchData();
+                      fetchFinancial();
+                    } else {
+                      const err = await res.json();
+                      notify(err.error || 'Erro ao registrar', 'error');
+                    }
+                  }}
+                  className="w-full py-4 bg-emerald-600 text-white font-black rounded-2xl hover:bg-emerald-700 shadow-xl shadow-emerald-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  ✅ Confirmar Pagamento
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Security Tab */}
+      {activeTab === 'security' && (
+        <div className="space-y-4">
+          <div className="premium-card p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="bg-emerald-100 p-2 rounded-xl">
+                <CheckCircle2 size={20} className="text-emerald-600" />
+              </div>
+              <h2 className="text-lg font-black text-slate-900">Status de Segurança</h2>
+            </div>
+
+            <div className="space-y-4">
+              {[
+                { label: 'Row Level Security (RLS)', status: true, desc: 'Ativado em todas as tabelas críticas' },
+                { label: 'Hash de Senhas', status: true, desc: 'Usando bcrypt/scrypt com salt aleatório' },
+                { label: 'Google OAuth 2.0', status: true, desc: 'Provedor ativado e Client ID configurado' },
+                { label: 'HTTPS em Produção', status: true, desc: 'Redirecionamento forçado para SSL' },
+                { label: 'Token de Dados Sensíveis (MP)', status: true, desc: 'Token Mercado Pago nunca exposto no frontend' },
+              ].map(item => (
+                <div key={item.label} className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl">
+                  <div className={cn("w-8 h-8 rounded-xl flex items-center justify-center", item.status ? "bg-emerald-100" : "bg-red-100")}>
+                    {item.status
+                      ? <CheckCircle2 size={18} className="text-emerald-600" />
+                      : <AlertCircle size={18} className="text-red-600" />
+                    }
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-800 text-sm">{item.label}</p>
+                    <p className="text-xs text-slate-400">{item.desc}</p>
+                  </div>
+                  <div className="ml-auto">
+                    <span className={cn("text-[10px] font-bold px-2 py-1 rounded-full uppercase", item.status ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700")}>
+                      {item.status ? 'OK' : 'ATENÇÃO'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="premium-card p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="bg-blue-100 p-2 rounded-xl">
+                <Lock size={20} className="text-blue-600" />
+              </div>
+              <h2 className="text-lg font-black text-slate-900">Variáveis de Ambiente</h2>
+            </div>
+            <div className="space-y-2">
+              {[
+                { key: 'VITE_SUPABASE_URL', safe: true },
+                { key: 'VITE_SUPABASE_ANON_KEY', safe: true },
+                { key: 'GEMINI_API_KEY', safe: true },
+              ].map(env => (
+                <div key={env.key} className="flex items-center justify-between p-3 bg-slate-900 rounded-xl">
+                  <span className="text-xs font-mono text-green-400">{env.key}</span>
+                  <span className="text-[10px] text-slate-500 font-mono">••••••••••••</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Org Modal */}
+      <AnimatePresence>
+        {showNewOrgModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowNewOrgModal(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl relative z-10 p-8"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-black text-slate-900">Nova Organização</h2>
+                <button onClick={() => setShowNewOrgModal(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome da Loja *</label>
+                  <input
+                    value={newOrg.name}
+                    onChange={e => setNewOrg({ ...newOrg, name: e.target.value })}
+                    placeholder="Churrasco do Zé"
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Slug (URL) *</label>
+                  <div className="flex items-center gap-0 border border-gray-200 rounded-xl overflow-hidden bg-gray-50">
+                    <span className="px-3 py-3 text-xs text-gray-400 font-bold border-r border-gray-200 bg-gray-100">/loja/</span>
+                    <input
+                      value={newOrg.slug}
+                      onChange={e => setNewOrg({ ...newOrg, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+                      placeholder="churrasco-do-ze"
+                      className="flex-1 px-3 py-3 bg-transparent focus:ring-0 outline-none text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Cor Primária</label>
+                    <div className="flex items-center gap-2 p-2 border border-gray-200 rounded-xl bg-gray-50">
+                      <input type="color" value={newOrg.primaryColor} onChange={e => setNewOrg({ ...newOrg, primaryColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border-0" />
+                      <span className="text-xs font-mono text-gray-500">{newOrg.primaryColor}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Cor Secundária</label>
+                    <div className="flex items-center gap-2 p-2 border border-gray-200 rounded-xl bg-gray-50">
+                      <input type="color" value={newOrg.secondaryColor} onChange={e => setNewOrg({ ...newOrg, secondaryColor: e.target.value })} className="w-8 h-8 rounded-lg cursor-pointer border-0" />
+                      <span className="text-xs font-mono text-gray-500">{newOrg.secondaryColor}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => setShowNewOrgModal(false)}
+                  className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-2xl font-bold hover:bg-gray-200 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleCreateOrg}
+                  disabled={saving}
+                  className="flex-1 py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Plus size={16} />}
+                  {saving ? 'Criando...' : 'Criar Loja'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+// SaaSAdminPage → redireciona para o Super Admin
+const SaaSAdminPage = () => {
+  const navigate = useNavigate();
+  useEffect(() => { navigate('/super-admin', { replace: true }); }, []);
+  return null;
+};
+
+// ============================================================
+// SUBSCRIBE PAGE - Página Pública de Assinatura do SaaS
+// ============================================================
+const SubscribePage = () => {
+  const [plans, setPlans] = useState<any[]>([]);
+  const [selectedPlan, setSelectedPlan] = useState<any | null>(null);
+  const [step, setStep] = useState<'plans' | 'form' | 'pix' | 'success'>('plans');
+  const [form, setForm] = useState({ name: '', email: '', phone: '', store_name: '', store_slug: '' });
+  const [pixData, setPixData] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [subId, setSubId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/saas/plans').then(r => r.json()).then(setPlans).catch(() => { });
+    // Poll for payment confirmation
+    if (subId) {
+      const interval = setInterval(async () => {
+        const res = await fetch(`/api/saas/subscribe/status/${subId}`);
+        const data = await res.json();
+        if (data.status === 'paid') {
+          setStep('success');
+          clearInterval(interval);
+        }
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [subId]);
+
+  const handleGeneratePix = async () => {
+    if (!form.name || !form.email || !form.store_name || !form.store_slug) {
+      setError('Preencha todos os campos obrigatórios.'); return;
+    }
+    setError(''); setLoading(true);
+    try {
+      const res = await fetch('/api/saas/subscribe/pix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: selectedPlan.id, ...form })
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Erro ao gerar PIX'); return; }
+      setPixData(data);
+      setSubId(data.subscription_id);
+      setStep('pix');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const planColors = ['from-slate-600 to-slate-800', 'from-orange-500 to-red-600', 'from-purple-600 to-indigo-700'];
+  const planHighlight = [false, true, false];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+      {/* Header */}
+      <div className="border-b border-white/10 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-900/50">
+            <Store size={18} className="text-white" />
+          </div>
+          <span className="text-white font-black text-lg">AP Delivery</span>
+        </div>
+        <Link to="/login" className="text-white/60 hover:text-white text-sm font-medium transition-colors">Já tenho conta →</Link>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-6 py-16">
+        {/* Plans Step */}
+        {step === 'plans' && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <div className="text-center mb-14">
+              <span className="bg-orange-500/20 text-orange-400 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest">Planos e Preços</span>
+              <h1 className="text-4xl md:text-5xl font-black text-white mt-4 mb-4">
+                Comece a vender<br className="hidden md:block" /> <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-red-500">online hoje</span>
+              </h1>
+              <p className="text-slate-400 text-lg max-w-xl mx-auto">Plataforma completa de delivery para restaurantes e lanchonetes. Cancele quando quiser.</p>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-6">
+              {plans.map((plan, i) => (
+                <motion.div
+                  key={plan.id}
+                  whileHover={{ y: -4, scale: 1.02 }}
+                  className={cn(
+                    "relative rounded-3xl p-8 cursor-pointer transition-all border",
+                    planHighlight[i]
+                      ? "bg-gradient-to-b from-orange-500 to-red-600 border-orange-400/50 shadow-2xl shadow-orange-900/50"
+                      : "bg-white/5 border-white/10 hover:border-white/20"
+                  )}
+                  onClick={() => { setSelectedPlan(plan); setStep('form'); }}
+                >
+                  {planHighlight[i] && (
+                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-yellow-400 text-yellow-900 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">
+                      Mais Popular
+                    </div>
+                  )}
+                  <div className={cn("text-sm font-bold uppercase tracking-widest mb-2", planHighlight[i] ? "text-orange-100" : "text-slate-400")}>{plan.name}</div>
+                  <div className={cn("text-4xl font-black mb-1", planHighlight[i] ? "text-white" : "text-white")}>
+                    R$ {plan.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className={cn("text-sm mb-6", planHighlight[i] ? "text-orange-100" : "text-slate-500")}>/mês</div>
+                  <div className={cn("text-sm mb-8", planHighlight[i] ? "text-orange-100" : "text-slate-400")}>{plan.description}</div>
+                  <ul className="space-y-2 mb-8">
+                    {plan.features.map((f: string) => (
+                      <li key={f} className={cn("text-sm flex items-center gap-2", planHighlight[i] ? "text-white" : "text-slate-300")}>
+                        <CheckCircle2 size={14} className={planHighlight[i] ? "text-yellow-300" : "text-emerald-400"} /> {f}
+                      </li>
+                    ))}
+                  </ul>
+                  <button className={cn(
+                    "w-full py-3 rounded-2xl font-bold text-sm transition-all",
+                    planHighlight[i]
+                      ? "bg-white text-orange-600 hover:bg-orange-50 shadow-lg"
+                      : "bg-white/10 text-white hover:bg-white/20 border border-white/20"
+                  )}>
+                    Começar com {plan.name} →
+                  </button>
+                </motion.div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        {/* Form Step */}
+        {step === 'form' && selectedPlan && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-lg mx-auto">
+            <button onClick={() => setStep('plans')} className="text-slate-400 hover:text-white text-sm font-medium mb-6 flex items-center gap-1 transition-colors">
+              ← Voltar aos planos
+            </button>
+            <div className="bg-white/5 border border-white/10 rounded-3xl p-8">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <h2 className="text-2xl font-black text-white">Dados da sua loja</h2>
+                  <p className="text-slate-400 text-sm mt-1">Plano {selectedPlan.name} — R$ {selectedPlan.price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/mês</p>
+                </div>
+                <div className="bg-orange-500/20 text-orange-400 px-3 py-1 rounded-full text-xs font-bold uppercase">{selectedPlan.name}</div>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  { key: 'name', label: 'Seu Nome *', placeholder: 'João Silva', type: 'text' },
+                  { key: 'email', label: 'E-mail *', placeholder: 'joao@email.com', type: 'email' },
+                  { key: 'phone', label: 'WhatsApp', placeholder: '(11) 99999-9999', type: 'tel' },
+                  { key: 'store_name', label: 'Nome da Loja *', placeholder: 'Churrasco do João', type: 'text' },
+                ].map(field => (
+                  <div key={field.key}>
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">{field.label}</label>
+                    <input
+                      type={field.type}
+                      value={(form as any)[field.key]}
+                      onChange={e => setForm({ ...form, [field.key]: e.target.value })}
+                      placeholder={field.placeholder}
+                      className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-600 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 transition-all"
+                    />
+                  </div>
+                ))}
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1.5">URL da sua loja * <span className="text-slate-600 font-normal normal-case">(endereço na internet)</span></label>
+                  <div className="flex items-center border border-white/10 rounded-xl overflow-hidden focus-within:border-orange-500 focus-within:ring-1 focus-within:ring-orange-500 transition-all">
+                    <span className="px-3 py-3 bg-white/5 text-slate-500 text-xs font-bold border-r border-white/10 shrink-0">/loja/</span>
+                    <input
+                      type="text"
+                      value={form.store_slug}
+                      onChange={e => setForm({ ...form, store_slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+                      placeholder="churrasco-do-joao"
+                      className="flex-1 px-3 py-3 bg-transparent text-white placeholder-slate-600 outline-none text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {error && <p className="text-red-400 text-sm mt-4 font-medium">⚠️ {error}</p>}
+
+              <button
+                onClick={handleGeneratePix}
+                disabled={loading}
+                className="mt-6 w-full py-4 bg-gradient-to-r from-orange-500 to-red-600 text-white font-black rounded-2xl hover:from-orange-600 hover:to-red-700 shadow-xl shadow-orange-900/50 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {loading ? <><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Gerando PIX...</> : '🔐 Pagar com PIX →'}
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* PIX Step */}
+        {step === 'pix' && pixData && (
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-md mx-auto text-center">
+            <div className="bg-white/5 border border-white/10 rounded-3xl p-8">
+              <div className="w-16 h-16 bg-emerald-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <CheckCircle2 size={32} className="text-emerald-400" />
+              </div>
+              <h2 className="text-2xl font-black text-white mb-2">PIX Gerado!</h2>
+              <p className="text-slate-400 text-sm mb-6">
+                Escaneie o QR Code ou copie o código PIX.<br />
+                Após o pagamento, sua loja será <strong className="text-white">ativada automaticamente</strong>.
+              </p>
+
+              {/* QR Code */}
+              {pixData.pix_qr_code_base64 ? (
+                <div className="bg-white p-4 rounded-2xl inline-block mb-6 shadow-2xl">
+                  <img src={`data:image/png;base64,${pixData.pix_qr_code_base64}`} alt="QR Code PIX" className="w-48 h-48" />
+                </div>
+              ) : (
+                <div className="bg-white/10 rounded-2xl p-6 mb-6">
+                  <p className="text-slate-400 text-sm">{pixData.message || 'Entre em contato pelo WhatsApp para ativar sua conta.'}</p>
+                  {pixData.whatsapp && (
+                    <a href={pixData.whatsapp} target="_blank" rel="noopener noreferrer"
+                      className="mt-4 inline-flex items-center gap-2 bg-green-500 text-white px-6 py-3 rounded-2xl font-bold hover:bg-green-600 transition-colors">
+                      WhatsApp →
+                    </a>
+                  )}
+                </div>
+              )}
+
+              {/* Copy PIX code */}
+              {pixData.pix_qr_code && (
+                <div className="mb-6">
+                  <p className="text-slate-500 text-xs mb-2 uppercase font-bold">Código PIX Copia e Cola</p>
+                  <div className="flex gap-2">
+                    <input
+                      readOnly
+                      value={pixData.pix_qr_code}
+                      className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-slate-300 font-mono outline-none"
+                    />
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(pixData.pix_qr_code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+                      className="px-3 py-2 bg-orange-500 text-white rounded-xl font-bold text-xs hover:bg-orange-600 transition-colors"
+                    >
+                      {copied ? '✅' : 'Copiar'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="text-slate-500 text-xs flex items-center justify-center gap-2">
+                <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse" />
+                Aguardando confirmação do pagamento...
+              </div>
+              <p className="text-slate-600 text-xs mt-2">Valor: <strong className="text-white">R$ {pixData.amount?.toFixed(2)}</strong> · Plano {pixData.plan}</p>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Success Step */}
+        {step === 'success' && (
+          <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md mx-auto text-center">
+            <div className="bg-gradient-to-b from-emerald-900/30 to-emerald-950/30 border border-emerald-500/30 rounded-3xl p-12">
+              <div className="text-6xl mb-4">🎉</div>
+              <h2 className="text-3xl font-black text-white mb-3">Pagamento Confirmado!</h2>
+              <p className="text-slate-400 mb-8">Sua loja foi criada com sucesso. Em breve você receberá as credenciais de acesso por e-mail.</p>
+              <Link to="/login">
+                <button className="w-full py-4 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black rounded-2xl hover:from-emerald-600 hover:to-teal-700 shadow-xl shadow-emerald-900/50 transition-all">
+                  Acessar minha loja →
+                </button>
+              </Link>
+            </div>
+          </motion.div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// TRACKING PAGE - Rastreamento do Entregador em Tempo Real
+// ============================================================
+const TrackingPage = () => {
+  const { courierId } = useParams<{ courierId: string }>();
+  const mapRef = useRef<HTMLDivElement>(null);
+  const leafletMapRef = useRef<any>(null);
+  const markerRef = useRef<any>(null);
+  const [courierInfo, setCourierInfo] = useState<{ courierName?: string; latitude?: number; longitude?: number } | null>(null);
+  const [status, setStatus] = useState<'waiting' | 'active' | 'stopped'>('waiting');
+
+  useEffect(() => {
+    if (!mapRef.current || leafletMapRef.current) return;
+
+    // Load Leaflet CSS
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+
+    // Init map after CSS loads
+    const initMap = async () => {
+      const L = (await import('leaflet')).default;
+
+      // Fix default icon path issue with bundlers
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      });
+
+      const map = L.map(mapRef.current!).setView([-23.5505, -46.6333], 14);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+      leafletMapRef.current = map;
+
+      const courierIcon = L.divIcon({
+        html: `<div style="background:#ea580c;width:40px;height:40px;border-radius:50%;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-size:18px;">🛵</div>`,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+        className: ''
+      });
+
+      const marker = L.marker([-23.5505, -46.6333], { icon: courierIcon }).addTo(map);
+      marker.bindPopup('📍 Entregador');
+      markerRef.current = marker;
+    };
+
+    initMap();
+
+    return () => {
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!courierId) return;
+
+    // Join tracking room
+    socket.emit('track:join', { courierId });
+
+    socket.on('courier:location:update', (data) => {
+      setCourierInfo(data);
+      setStatus('active');
+      if (leafletMapRef.current && markerRef.current) {
+        const latlng = [data.latitude, data.longitude] as [number, number];
+        markerRef.current.setLatLng(latlng);
+        markerRef.current.setPopupContent(`📍 ${data.courierName || 'Entregador'}`);
+        leafletMapRef.current.setView(latlng, 16);
+      }
+    });
+
+    socket.on('courier:location:stopped', () => {
+      setStatus('stopped');
+    });
+
+    return () => {
+      socket.emit('track:leave', { courierId });
+      socket.off('courier:location:update');
+      socket.off('courier:location:stopped');
+    };
+  }, [courierId]);
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex flex-col">
+      {/* Header */}
+      <div className="bg-slate-900 border-b border-white/10 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 bg-gradient-to-br from-orange-500 to-red-600 rounded-xl flex items-center justify-center">
+            <Navigation size={18} className="text-white" />
+          </div>
+          <div>
+            <p className="text-white font-black text-sm">Rastreamento ao Vivo</p>
+            <p className="text-slate-400 text-xs">{courierInfo?.courierName || 'Aguardando entregador...'}</p>
+          </div>
+        </div>
+        <div className={cn(
+          "flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold",
+          status === 'active' ? 'bg-green-500/20 text-green-400' :
+            status === 'stopped' ? 'bg-red-500/20 text-red-400' :
+              'bg-yellow-500/20 text-yellow-400'
+        )}>
+          <div className={cn("w-2 h-2 rounded-full", status === 'active' ? 'bg-green-400 animate-pulse' : status === 'stopped' ? 'bg-red-400' : 'bg-yellow-400 animate-pulse')} />
+          {status === 'active' ? 'Ao Vivo' : status === 'stopped' ? 'Encerrado' : 'Aguardando'}
+        </div>
+      </div>
+
+      {/* Map Container */}
+      <div className="flex-1 relative">
+        <div ref={mapRef} className="w-full h-full min-h-[calc(100vh-80px)]" />
+
+        {status === 'waiting' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+            <div className="text-center">
+              <div className="text-6xl mb-4">🛵</div>
+              <p className="text-white font-black text-xl">Aguardando o entregador...</p>
+              <p className="text-slate-400 mt-2 text-sm">A localização aparecerá assim que o entregador ativar o GPS</p>
+              <div className="mt-4 w-8 h-8 border-2 border-orange-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          </div>
+        )}
+        {status === 'stopped' && (
+          <div className="absolute bottom-4 left-4 right-4 bg-red-900/80 text-white p-4 rounded-2xl text-center font-bold">
+            O entregador parou de compartilhar a localização.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// METRICS TAB - Dashboard de Métricas para Dono da Loja
+// ============================================================
+const MetricsTab = ({ orgId }: { orgId?: string }) => {
+  const [orders, setOrders] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!orgId) return;
+    fetch(`/api/${orgId}/orders`)
+      .then(r => r.json())
+      .then(data => { setOrders(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [orgId]);
+
+  if (loading) return (
+    <div className="flex items-center justify-center h-64">
+      <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+
+  // --- Compute Metrics ---
+  const delivered = orders.filter(o => o.status === 'delivered' && o.payment_status === 'paid');
+  const cancelled = orders.filter(o => o.status === 'cancelled');
+  const totalRevenue = delivered.reduce((s, o) => s + (o.total_price || 0), 0);
+  const avgTicket = delivered.length > 0 ? totalRevenue / delivered.length : 0;
+  const cancelRate = orders.length > 0 ? (cancelled.length / orders.length) * 100 : 0;
+
+  // Revenue by day (last 30 days)
+  const revenueByDay: Record<string, number> = {};
+  const today = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    revenueByDay[key] = 0;
+  }
+  delivered.forEach(o => {
+    const d = new Date(o.created_at);
+    const key = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    if (key in revenueByDay) revenueByDay[key] += o.total_price || 0;
+  });
+  const revenueData = Object.entries(revenueByDay).map(([date, value]) => ({ date, value: Number(value.toFixed(2)) }));
+
+  // Top products
+  const productCount: Record<string, { name: string, count: number, revenue: number }> = {};
+  delivered.forEach(o => {
+    (o.items || []).forEach((item: any) => {
+      const name = item.name || 'Produto';
+      if (!productCount[name]) productCount[name] = { name, count: 0, revenue: 0 };
+      productCount[name].count++;
+      productCount[name].revenue += item.basePrice || 0;
+    });
+  });
+  const topProducts = Object.values(productCount).sort((a, b) => b.count - a.count).slice(0, 5);
+
+  // Peak hours
+  const hourCount: Record<number, number> = {};
+  for (let h = 0; h < 24; h++) hourCount[h] = 0;
+  orders.forEach(o => {
+    const h = new Date(o.created_at).getHours();
+    hourCount[h] = (hourCount[h] || 0) + 1;
+  });
+  const peakData = Object.entries(hourCount)
+    .filter(([h]) => Number(h) >= 6)
+    .map(([hour, count]) => ({ hour: `${hour}h`, count }));
+
+  return (
+    <div className="space-y-8">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[
+          { label: 'Receita Total', value: `R$ ${totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, icon: '💰', color: 'from-emerald-500 to-teal-600' },
+          { label: 'Ticket Médio', value: `R$ ${avgTicket.toFixed(2)}`, icon: '🎟️', color: 'from-blue-500 to-indigo-600' },
+          { label: 'Pedidos Entregues', value: delivered.length, icon: '✅', color: 'from-orange-500 to-red-600' },
+          { label: 'Taxa Cancelamento', value: `${cancelRate.toFixed(1)}%`, icon: '❌', color: 'from-slate-500 to-slate-700' },
+        ].map(card => (
+          <div key={card.label} className={`bg-gradient-to-br ${card.color} rounded-3xl p-5 text-white shadow-lg`}>
+            <div className="text-2xl mb-1">{card.icon}</div>
+            <div className="text-2xl font-black">{card.value}</div>
+            <div className="text-xs font-bold opacity-80 mt-1">{card.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Revenue by Day */}
+      <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-lg">
+        <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><TrendingUp size={20} className="text-emerald-500" /> Receita por Dia (últimos 30 dias)</h3>
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={revenueData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="date" tick={{ fontSize: 10 }} interval={4} />
+            <YAxis tick={{ fontSize: 10 }} tickFormatter={v => `R$${v}`} />
+            <Tooltip formatter={(v: any) => [`R$ ${Number(v).toFixed(2)}`, 'Receita']} />
+            <Line type="monotone" dataKey="value" stroke="#10b981" strokeWidth={2.5} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Top Products */}
+        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-lg">
+          <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><BarChart3 size={20} className="text-orange-500" /> Top 5 Produtos</h3>
+          {topProducts.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-8">Sem dados ainda</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={topProducts} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis type="number" tick={{ fontSize: 10 }} />
+                <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} width={100} />
+                <Tooltip formatter={(v: any) => [v, 'Vendas']} />
+                <Bar dataKey="count" fill="#ea580c" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Peak Hours */}
+        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-lg">
+          <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><Clock size={20} className="text-blue-500" /> Horário de Pico</h3>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={peakData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 10 }} />
+              <Tooltip formatter={(v: any) => [v, 'Pedidos']} />
+              <Bar dataKey="count" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import crypto from "crypto";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -20,18 +21,84 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database persistence note: Migrating from SQLite to Supabase for production scalability.
 
+// Password Hashing Utility
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${hash}:${salt}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  if (!storedHash || !storedHash.includes(':')) {
+    // Fallback for legacy plain-text passwords during transition
+    return password === storedHash;
+  }
+  const [hash, salt] = storedHash.split(':');
+  const buffer = crypto.scryptSync(password, salt, 64);
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), buffer);
+}
+
 // Migrated logic from SQLite to Supabase
 
 async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
   const io = new Server(httpServer);
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
+
+  // Force HTTPS in production
+  app.use((req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+      return res.redirect(`https://${req.headers.host}${req.url}`);
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-  // SaaS Tenant Lookup
+  // SaaS Tenant Lookup via Domain or Slug
+  app.get("/api/org/detect", async (req, res) => {
+    const host = req.query.host as string || req.hostname;
+    const fallbackSlug = req.query.slug as string;
+
+    console.log(`[BACKEND] Detecting org for host: ${host}, fallback: ${fallbackSlug}`);
+
+    try {
+      // 1. Try by custom domain
+      let { data, error } = await supabase
+        .from('organizations')
+        .select('*')
+        .eq('custom_domain', host)
+        .single();
+
+      // 2. If not found and host contains a subdomain of your main apps (optional logic)
+      // For now, if not found by domain, try the fallback slug
+      if (error && fallbackSlug) {
+        const { data: slugData, error: slugError } = await supabase
+          .from('organizations')
+          .select('*')
+          .eq('slug', fallbackSlug)
+          .single();
+        data = slugData;
+        error = slugError;
+      }
+
+      if (error || !data) {
+        return res.status(404).json({ error: "Organização não encontrada" });
+      }
+
+      const sanitizedData = {
+        ...data,
+        has_mp_token: !!data.mp_access_token
+      };
+      delete sanitizedData.mp_access_token;
+      res.json(sanitizedData);
+    } catch (err: any) {
+      res.status(500).json({ error: "Erro interno" });
+    }
+  });
+
   app.get("/api/org/:slug", async (req, res) => {
     console.log(`[BACKEND] Request for org: ${req.params.slug}`);
     try {
@@ -56,6 +123,7 @@ async function startServer() {
     }
   });
 
+
   // Super Admin Routes (Global)
   app.get("/api/organizations", async (req, res) => {
     const { data, error } = await supabase.from('organizations').select('*').order('created_at', { ascending: false });
@@ -71,14 +139,368 @@ async function startServer() {
   });
 
   app.get("/api/admin/global-metrics", async (req, res) => {
-    const { data: orgs } = await supabase.from('organizations').select('id');
+    const { data: orgs } = await supabase.from('organizations').select('id, status');
     const { data: orders } = await supabase.from('orders').select('total_price, payment_status');
 
     const totalRevenue = orders?.filter(o => o.payment_status === 'paid').reduce((acc, o) => acc + o.total_price, 0) || 0;
     const totalOrders = orders?.length || 0;
     const totalOrgs = orgs?.length || 0;
+    const activeOrgs = orgs?.filter(o => o.status === 'active' || !o.status).length || 0;
 
-    res.json({ totalRevenue, totalOrders, totalOrgs });
+    res.json({ totalRevenue, totalOrders, totalOrgs, activeOrgs });
+  });
+
+  // Toggle org active/inactive
+  app.patch("/api/organizations/:id/status", async (req, res) => {
+    const { status } = req.body;
+    if (!['active', 'inactive', 'suspended', 'trial'].includes(status)) {
+      return res.status(400).json({ error: "Status inválido" });
+    }
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ status })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, org: data });
+  });
+
+  // Set billing exemption
+  app.patch("/api/organizations/:id/billing-exempt", async (req, res) => {
+    const { billing_exempt } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ billing_exempt: !!billing_exempt })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, org: data });
+  });
+
+  // Set billing due date
+  app.patch("/api/organizations/:id/billing-due", async (req, res) => {
+    const { billing_due_date, plan } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ billing_due_date, plan })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, org: data });
+  });
+
+  // Auto-suspend overdue organizations (called on each API check)
+  app.post("/api/admin/run-billing-check", async (req, res) => {
+    const today = new Date().toISOString().split('T')[0];
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ status: 'suspended' })
+      .eq('billing_exempt', false)
+      .eq('status', 'active')
+      .lt('billing_due_date', today)
+      .not('billing_due_date', 'is', null)
+      .select();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ suspended: data?.length || 0, orgs: data });
+  });
+
+  // Update custom domain
+  app.patch("/api/organizations/:id/custom-domain", async (req, res) => {
+    const { custom_domain } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ custom_domain })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, org: data });
+  });
+
+  // ===================================================
+  // SAAS FINANCEIRO - Pagamentos de Mensalidades
+  // ===================================================
+
+  // Registrar um pagamento de mensalidade de uma org
+  app.post("/api/saas-payments", async (req, res) => {
+    const { org_id, amount, month_ref, notes, payment_method } = req.body;
+    if (!org_id || !amount || !month_ref) {
+      return res.status(400).json({ error: "org_id, amount e month_ref são obrigatórios" });
+    }
+    const { data, error } = await supabase
+      .from('saas_payments')
+      .insert([{ org_id, amount, month_ref, notes, payment_method: payment_method || 'manual' }])
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    // Atualizar data de vencimento para próximo mês automaticamente
+    const nextMonth = new Date(month_ref);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+    const nextDue = nextMonth.toISOString().split('T')[0];
+    await supabase.from('organizations').update({ billing_due_date: nextDue, status: 'active' }).eq('id', org_id);
+
+    res.json({ success: true, payment: data });
+  });
+
+  // Listar todos os pagamentos (com dados da org)
+  app.get("/api/saas-payments", async (req, res) => {
+    const { data, error } = await supabase
+      .from('saas_payments')
+      .select('*, organization:org_id(name, slug, plan, billing_exempt, status)')
+      .order('paid_at', { ascending: false })
+      .limit(200);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  // Resumo financeiro do SaaS
+  app.get("/api/saas-payments/summary", async (req, res) => {
+    try {
+      const now = new Date();
+      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const lastMonth = now.getMonth() === 0
+        ? `${now.getFullYear() - 1}-12`
+        : `${now.getFullYear()}-${String(now.getMonth()).padStart(2, '0')}`;
+
+      const [orgsResult, paymentsResult, thisMonthResult] = await Promise.all([
+        supabase.from('organizations').select('id, name, slug, status, billing_exempt, billing_due_date, plan'),
+        supabase.from('saas_payments').select('amount, month_ref, org_id').order('month_ref', { ascending: false }),
+        supabase.from('saas_payments').select('amount, org_id').eq('month_ref', currentMonth)
+      ]);
+
+      const orgs = orgsResult.data || [];
+      const payments = paymentsResult.data || [];
+      const thisMonthPayments = thisMonthResult.data || [];
+
+      const paidOrgIds = new Set(thisMonthPayments.map((p: any) => p.org_id));
+      const totalEarnedAllTime = payments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
+      const totalThisMonth = thisMonthPayments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
+
+      const chargeableOrgs = orgs.filter((o: any) => !o.billing_exempt);
+      const paidThisMonth = chargeableOrgs.filter((o: any) => paidOrgIds.has(o.id));
+      const overdueOrgs = chargeableOrgs.filter((o: any) => {
+        if (paidOrgIds.has(o.id)) return false;
+        if (!o.billing_due_date) return false;
+        return new Date(o.billing_due_date) < now;
+      });
+      const exemptOrgs = orgs.filter((o: any) => o.billing_exempt);
+
+      res.json({
+        currentMonth,
+        totalEarnedAllTime,
+        totalThisMonth,
+        totalOrgs: orgs.length,
+        chargeableOrgs: chargeableOrgs.length,
+        paidThisMonth: paidThisMonth.length,
+        overdueOrgs: overdueOrgs.length,
+        exemptOrgs: exemptOrgs.length,
+        paidList: paidThisMonth,
+        overdueList: overdueOrgs,
+        exemptList: exemptOrgs,
+        recentPayments: payments.slice(0, 20)
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Deletar um pagamento
+  app.delete("/api/saas-payments/:id", async (req, res) => {
+    const { error } = await supabase.from('saas_payments').delete().eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  // ===================================================
+  // SAAS SUBSCRIPTION PIX - Pagamento para Contratar
+  // ===================================================
+
+  // Planos disponíveis
+  const SAAS_PLANS = [
+    { id: 'basic', name: 'Básico', price: 149.90, description: 'Até 500 pedidos/mês, 1 loja', features: ['Cardápio digital', 'Pedidos online', 'Painel admin', 'Suporte por chat'] },
+    { id: 'pro', name: 'Profissional', price: 299.90, description: 'Pedidos ilimitados, 3 lojas', features: ['Tudo do Básico', 'Múltiplos entregadores', 'Relatórios avançados', 'Domínio personalizado', 'Suporte prioritário'] },
+    { id: 'enterprise', name: 'Enterprise', price: 599.90, description: 'Todas as funcionalidades', features: ['Tudo do Pro', 'Lojas ilimitadas', 'API access', 'Onboarding dedicado', 'SLA garantido'] },
+  ];
+
+  app.get("/api/saas/plans", (req, res) => {
+    res.json(SAAS_PLANS);
+  });
+
+  // Criar cobrança PIX para assinar o SaaS
+  app.post("/api/saas/subscribe/pix", async (req, res) => {
+    const { plan_id, name, email, phone, store_name, store_slug } = req.body;
+
+    if (!plan_id || !name || !email || !store_name || !store_slug) {
+      return res.status(400).json({ error: "Todos os campos são obrigatórios" });
+    }
+
+    const plan = SAAS_PLANS.find(p => p.id === plan_id);
+    if (!plan) return res.status(400).json({ error: "Plano inválido" });
+
+    // Check if slug is available
+    const { data: existingOrg } = await supabase.from('organizations').select('id').eq('slug', store_slug).single();
+    if (existingOrg) return res.status(400).json({ error: "Este slug já está em uso. Escolha outro nome para a URL da sua loja." });
+
+    const SAAS_MP_TOKEN = process.env.SAAS_MP_ACCESS_TOKEN;
+    if (!SAAS_MP_TOKEN) {
+      // Fallback: create a pending subscription record without MP
+      const { data } = await supabase.from('saas_subscriptions').insert([{
+        plan_id, name, email, phone, store_name, store_slug,
+        status: 'pending',
+        amount: plan.price,
+        pix_qr_code: null,
+        pix_qr_code_base64: null,
+      }]).select().single();
+      return res.json({
+        success: true,
+        subscription_id: data?.id,
+        message: 'Solicite o PIX via WhatsApp para ativar sua conta.',
+        whatsapp: 'https://wa.me/5511999999999?text=Quero+contratar+o+plano+' + plan.name
+      });
+    }
+
+    try {
+      // Create Mercado Pago PIX charge
+      const mpRes = await fetch('https://api.mercadopago.com/v1/payments', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SAAS_MP_TOKEN}`,
+          'Content-Type': 'application/json',
+          'X-Idempotency-Key': `saas-${store_slug}-${Date.now()}`
+        },
+        body: JSON.stringify({
+          transaction_amount: plan.price,
+          description: `AP Delivery SaaS - Plano ${plan.name} - ${store_name}`,
+          payment_method_id: 'pix',
+          payer: {
+            email,
+            first_name: name.split(' ')[0],
+            last_name: name.split(' ').slice(1).join(' ') || 'Cliente',
+            identification: { type: 'CPF', number: phone?.replace(/\D/g, '') || '00000000000' }
+          },
+          notification_url: `${process.env.VITE_API_URL || 'https://churrascogrego.up.railway.app'}/api/saas/subscribe/webhook`,
+          metadata: { plan_id, store_name, store_slug, name, email, phone }
+        })
+      });
+
+      const mpData = await mpRes.json() as any;
+
+      if (!mpRes.ok) {
+        console.error('[SAAS PIX] MP Error:', mpData);
+        return res.status(500).json({ error: 'Erro ao gerar PIX. Tente novamente.' });
+      }
+
+      // Save pending subscription
+      const { data: sub } = await supabase.from('saas_subscriptions').insert([{
+        plan_id,
+        name,
+        email,
+        phone,
+        store_name,
+        store_slug,
+        status: 'pending',
+        amount: plan.price,
+        mp_payment_id: String(mpData.id),
+        pix_qr_code: mpData.point_of_interaction?.transaction_data?.qr_code,
+        pix_qr_code_base64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
+        expires_at: mpData.date_of_expiration,
+      }]).select().single();
+
+      res.json({
+        success: true,
+        subscription_id: sub?.id,
+        pix_qr_code: mpData.point_of_interaction?.transaction_data?.qr_code,
+        pix_qr_code_base64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
+        expires_at: mpData.date_of_expiration,
+        amount: plan.price,
+        plan: plan.name,
+      });
+    } catch (err: any) {
+      console.error('[SAAS PIX] Error:', err);
+      res.status(500).json({ error: 'Erro ao gerar PIX' });
+    }
+  });
+
+  // Webhook Mercado Pago - Confirmação de pagamento SaaS
+  app.post("/api/saas/subscribe/webhook", async (req, res) => {
+    try {
+      const { type, data } = req.body;
+      if (type !== 'payment' || !data?.id) return res.sendStatus(200);
+
+      const SAAS_MP_TOKEN = process.env.SAAS_MP_ACCESS_TOKEN;
+      if (!SAAS_MP_TOKEN) return res.sendStatus(200);
+
+      // Verificar pagamento no MP
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
+        headers: { 'Authorization': `Bearer ${SAAS_MP_TOKEN}` }
+      });
+      const payment = await mpRes.json() as any;
+
+      if (payment.status !== 'approved') return res.sendStatus(200);
+
+      const meta = payment.metadata;
+      const { plan_id, store_name, store_slug, name, email, phone } = meta || {};
+
+      if (!store_slug) return res.sendStatus(200);
+
+      // Update subscription status
+      await supabase.from('saas_subscriptions')
+        .update({ status: 'paid', mp_payment_id: String(payment.id) })
+        .eq('store_slug', store_slug)
+        .eq('status', 'pending');
+
+      // Check if org already exists
+      const { data: existingOrg } = await supabase.from('organizations').select('id').eq('slug', store_slug).single();
+      if (existingOrg) return res.sendStatus(200);
+
+      // Create the organization automatically
+      const plan = SAAS_PLANS.find(p => p.id === plan_id);
+      const now = new Date();
+      const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+
+      const { data: newOrg } = await supabase.from('organizations').insert([{
+        name: store_name,
+        slug: store_slug,
+        status: 'active',
+        plan: plan_id || 'basic',
+        billing_due_date: nextMonth.toISOString().split('T')[0],
+        billing_exempt: false,
+        branding: { primaryColor: '#ea580c', secondaryColor: '#fb923c', logoUrl: null },
+      }]).select().single();
+
+      // Register first payment
+      if (newOrg) {
+        const monthRef = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        await supabase.from('saas_payments').insert([{
+          org_id: newOrg.id,
+          amount: payment.transaction_amount,
+          month_ref: monthRef,
+          payment_method: 'pix',
+          notes: `Pagamento de assinatura via MP Payment ID: ${payment.id}`,
+        }]);
+      }
+
+      console.log(`[SAAS WEBHOOK] ✅ Org created automatically: ${store_slug}`);
+      res.sendStatus(200);
+    } catch (err: any) {
+      console.error('[SAAS WEBHOOK] Error:', err);
+      res.sendStatus(500);
+    }
+  });
+
+  // Check subscription status
+  app.get("/api/saas/subscribe/status/:subscription_id", async (req, res) => {
+    const { data, error } = await supabase
+      .from('saas_subscriptions')
+      .select('status, store_slug, plan_id, store_name')
+      .eq('id', req.params.subscription_id)
+      .single();
+    if (error) return res.status(404).json({ error: 'Assinatura não encontrada' });
+    res.json(data);
   });
 
   // Mercado Pago Access Token config (per org)
@@ -100,6 +522,19 @@ async function startServer() {
     const { data: org } = await supabase.from('organizations').select('branding').eq('id', req.params.id).single();
     const newBranding = { ...(org?.branding || {}), logoUrl };
     const { data, error } = await supabase.from('organizations').update({ branding: newBranding }).eq('id', req.params.id).select().single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, org: data });
+  });
+
+  // Update operating hours
+  app.patch("/api/organizations/:id/operating-hours", async (req, res) => {
+    const { operating_hours } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ operating_hours })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, org: data });
   });
@@ -128,10 +563,9 @@ async function startServer() {
         return res.status(400).json({ error: "Loja não configurou o Mercado Pago ainda." });
       }
 
-      // Call Mercado Pago API
       const appUrl = (process.env.VITE_APP_URL && process.env.VITE_APP_URL.length > 5)
         ? process.env.VITE_APP_URL
-        : 'https://churrasco-paty-production.up.railway.app';
+        : 'https://churrascogregodapaty.com';
 
       const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
         method: "POST",
@@ -156,6 +590,14 @@ async function startServer() {
         return res.status(400).json({ error: "Erro ao gerar PIX. Verifique as credenciais do Mercado Pago." });
       }
 
+      if (order_id) {
+        // Link the payment ID to the order so the webhook can find it
+        await supabase
+          .from('orders')
+          .update({ mp_payment_id: mpData.id.toString() })
+          .eq('id', order_id);
+      }
+
       res.json({
         payment_id: mpData.id,
         qr_code: mpData.point_of_interaction?.transaction_data?.qr_code,
@@ -172,9 +614,20 @@ async function startServer() {
   // Webhook Mercado Pago - payment confirmation
   app.post("/api/webhook/mercadopago", async (req, res) => {
     try {
-      const { type, data } = req.body;
-      if (type === 'payment' && data?.id) {
-        console.log(`[WEBHOOK] Getting details for MP payment: ${data.id}`);
+      console.log("[WEBHOOK] Received Payload:", JSON.stringify(req.body));
+      console.log("[WEBHOOK] Received Query:", JSON.stringify(req.query));
+
+      const typeOrTopic = req.query.topic || req.body.type || req.body.action;
+      let paymentId = req.query.id || req.body.data?.id;
+
+      if (req.body.action?.startsWith('payment.')) {
+        paymentId = req.body.data?.id;
+      }
+
+      const isPaymentEvent = typeOrTopic === 'payment' || typeOrTopic?.startsWith('payment.');
+
+      if (isPaymentEvent && paymentId) {
+        console.log(`[WEBHOOK] Getting details for MP payment: ${paymentId}`);
 
         // We SHOULD fetch payment details to verify status, but for simplicity and speed 
         // given the user's current situation, we could also rely on the notification data if it was provided.
@@ -184,7 +637,7 @@ async function startServer() {
         const { data: matchedOrders } = await supabase
           .from('orders')
           .select('id, status, org_id')
-          .eq('mp_payment_id', data.id.toString())
+          .eq('mp_payment_id', paymentId.toString())
           .limit(1);
 
         if (matchedOrders && matchedOrders.length > 0) {
@@ -194,7 +647,7 @@ async function startServer() {
           const { data: org } = await supabase.from('organizations').select('mp_access_token').eq('id', order.org_id).single();
 
           if (org?.mp_access_token) {
-            const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${data.id}`, {
+            const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
               headers: { "Authorization": `Bearer ${org.mp_access_token}` }
             });
             const mpData = await mpRes.json();
@@ -214,7 +667,7 @@ async function startServer() {
               }
               console.log(`[WEBHOOK] Order #${order.id} paid via MP`);
             } else {
-              console.log(`[WEBHOOK] Payment ${data.id} status is ${mpData.status}, skipping update.`);
+              console.log(`[WEBHOOK] Payment ${paymentId} status is ${mpData.status}, skipping update.`);
             }
           }
         }
@@ -226,6 +679,63 @@ async function startServer() {
     }
   });
 
+
+  // SaaS Admin Routes (Global Management)
+  app.get("/api/saas/organizations", async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select(`
+          *,
+          owner:owner_id (
+            name,
+            phone,
+            email
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.patch("/api/saas/organizations/:id", async (req, res) => {
+    const { custom_domain, name, slug } = req.body;
+    try {
+      const { data, error } = await supabase
+        .from('organizations')
+        .update({ custom_domain, name, slug })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/saas/stats", async (req, res) => {
+    try {
+      const { count: orgCount } = await supabase.from('organizations').select('*', { count: 'exact', head: true });
+      const { count: userCount } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+      const { data: orders } = await supabase.from('orders').select('total_price').eq('payment_status', 'paid');
+
+      const totalRevenue = orders?.reduce((acc, o) => acc + (Number(o.total_price) || 0), 0) || 0;
+
+      res.json({
+        total_organizations: orgCount,
+        total_users: userCount,
+        total_revenue: totalRevenue
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // Saas Registration (New Store + Admin)
   app.post("/api/saas/register-store", async (req, res) => {
@@ -252,7 +762,7 @@ async function startServer() {
           name: adminName,
           phone: adminPhone,
           email: adminEmail,
-          password: adminPassword,
+          password: hashPassword(adminPassword),
           role: 'admin',
           org_id: org.id
         }])
@@ -270,30 +780,93 @@ async function startServer() {
 
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
-    const { name, phone, password } = req.body;
+    const { name, phone, password, role, org_id } = req.body;
     try {
-      // In a real app we'd use supabase.auth.signUp
-      // For temporary compatibility, we insert into profiles
-      const { data, error } = await supabase.from('profiles').insert([{ name, phone, password, points: 0 }]).select();
+      // Para compatibilidade, inserimos no perfil com suporte a cargo e organização
+      const { data, error } = await supabase.from('profiles').insert([{
+        name, phone, password: hashPassword(password), role: role || 'user', org_id: org_id || null, points: 0
+      }]).select();
       if (error) throw error;
       res.json(data[0]);
-    } catch (err) {
-      res.status(400).json({ error: "Telefone já cadastrado ou erro no banco" });
+    } catch (err: any) {
+      console.error("[REGISTER ERROR]", err);
+      res.status(400).json({ error: err.message || "Telefone já cadastrado ou erro no banco", details: err });
+    }
+  });
+
+  app.get("/api/auth/me", async (req, res) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No authorization header" });
+
+    const token = authHeader.replace("Bearer ", "");
+    try {
+      // Verify session with Supabase
+      const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !sbUser) return res.status(401).json({ error: "Invalid session" });
+
+      // Get profile from our table
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', sbUser.email)
+        .single();
+
+      if (profileError || !profile) {
+        // If profile doesn't exist, create it (Social Login First Time)
+        const { data: newProfile, error: createError } = await supabase
+          .from('profiles')
+          .insert([{
+            id: sbUser.id,
+            name: sbUser.user_metadata.full_name || sbUser.email?.split('@')[0] || "Usuário Google",
+            email: sbUser.email,
+            role: 'user',
+            points: 0
+          }])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        return res.json(newProfile);
+      }
+
+      res.json(profile);
+    } catch (err: any) {
+      console.error("[AUTH ME ERROR]", err);
+      res.status(500).json({ error: "Internal server error during auth verification" });
     }
   });
 
   app.post("/api/auth/login", async (req, res) => {
-    const { phone, email, password } = req.body;
-    let query = supabase.from('profiles').select('*');
-    if (email) query = query.eq('email', email);
-    else query = query.eq('phone', phone);
+    try {
+      const { phone, email, password } = req.body;
+      let query = supabase.from('profiles').select('*');
+      if (email) query = query.eq('email', email);
+      else query = query.eq('phone', phone);
 
-    const { data, error } = await query.single();
+      const { data, error } = await query;
 
-    if (data && data.password === password) {
-      res.json(data);
-    } else {
-      res.status(401).json({ error: "Credenciais incorretas" });
+      console.log(`[LOGIN ATTEMPT] Phone/Email: ${phone || email} | Found: ${data?.length} rows`);
+
+      if (error) {
+        console.error("[LOGIN DB ERROR]", error);
+        return res.status(500).json({ error: "Erro de banco de dados", details: error });
+      }
+
+      if (data && data.length > 0) {
+        const user = data[0];
+        if (verifyPassword(password, user.password)) {
+          return res.json(user);
+        } else {
+          console.log(`[LOGIN FAILED] Password mismatch for ${phone || email}`);
+          return res.status(401).json({ error: "Credenciais incorretas (Senha)" });
+        }
+      } else {
+        console.log(`[LOGIN FAILED] User not found: ${phone || email}`);
+        return res.status(401).json({ error: "Credenciais incorretas (Usuário não encontrado)" });
+      }
+    } catch (err: any) {
+      console.error("[LOGIN FATAL ERROR]", err);
+      res.status(500).json({ error: "Erro interno no servidor de login", details: err.message });
     }
   });
 
@@ -473,6 +1046,25 @@ async function startServer() {
     try {
       const { user_id, customer_name, customer_phone, items, total_price, payment_status = 'pending', address, latitude, longitude, payment_method } = req.body;
 
+      // Check if shop is open
+      const { data: org } = await supabase.from('organizations').select('operating_hours').eq('id', req.params.orgId).single();
+      if (org?.operating_hours) {
+        const now = new Date();
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const brTime = new Date(utc + (3600000 * -3)); // UTC-3
+
+        const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+        const dayName = dayNames[brTime.getDay()];
+        const hours = (org.operating_hours as any)[dayName];
+
+        if (hours) {
+          const currentFormatted = brTime.getHours().toString().padStart(2, '0') + ":" + brTime.getMinutes().toString().padStart(2, '0');
+          if (hours.closed || currentFormatted < hours.open || currentFormatted > hours.close) {
+            return res.status(403).json({ error: "Desculpe, a loja está fechada no momento." });
+          }
+        }
+      }
+
       const initialStatus = 'pending';
 
       const { data: newOrder, error } = await supabase.from('orders').insert([{
@@ -512,10 +1104,17 @@ async function startServer() {
       return res.status(404).json({ error: "Pedido não encontrado." });
     }
 
-    // Impedir entrega se pagamento não concluído
+    // Impedir entrega se pagamento não concluído (exceto pagamento em mãos/cartão presencial)
     if (status === 'delivered') {
       if (order.payment_status !== 'paid') {
-        return res.status(400).json({ error: "Não é possível finalizar a entrega sem pagamento concluído." });
+        if (order.payment_method === 'pix') {
+          return res.status(400).json({ error: "Não é possível finalizar a entrega sem pagamento concluído." });
+        } else {
+          // Para entregas onde o pagamento é no ato (Dinheiro/Cartão), marcamos como pago
+          await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', orderId);
+          order.payment_status = 'paid';
+          io.emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
+        }
       }
     }
 
@@ -594,6 +1193,147 @@ Diretrizes:
     }
   });
 
+  // Courier Management
+  app.get("/api/:orgId/couriers", async (req, res) => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, name, phone')
+      .eq('org_id', req.params.orgId)
+      .eq('role', 'courier');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete("/api/couriers/:id", async (req, res) => {
+    const { error } = await supabase
+      .from('profiles')
+      .delete()
+      .eq('id', req.params.id)
+      .eq('role', 'courier'); // Segurança extra para deletar apenas entregadores
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
+  app.patch("/api/orders/:id/courier", async (req, res) => {
+    const { courier_id, delivery_fee } = req.body;
+    const { data, error } = await supabase
+      .from('orders')
+      .update({ courier_id, delivery_fee: delivery_fee || 0, status: 'preparing' })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+
+    io.emit("order:update", { id: data.id, status: 'preparing', courier_id });
+    res.json(data);
+  });
+
+  app.get("/api/courier/:id/orders", async (req, res) => {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('courier_id', req.params.id)
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.get("/api/courier/:id/stats", async (req, res) => {
+    // Apenas comissões não pagas
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('delivery_fee')
+      .eq('courier_id', req.params.id)
+      .eq('status', 'delivered')
+      .eq('commission_paid', false);
+
+    if (ordersError) return res.status(500).json({ error: ordersError.message });
+
+    // Vales não compensados (settled = false)
+    const { data: advances, error: advancesError } = await supabase
+      .from('expenses')
+      .select('amount')
+      .eq('courier_id', req.params.id)
+      .eq('settled', false);
+
+    if (advancesError) return res.status(500).json({ error: advancesError.message });
+
+    const totalCommissions = orders.reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
+    const totalAdvances = advances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+    const totalDeliveries = orders.length;
+
+    res.json({
+      total_commissions: totalCommissions,
+      total_advances: totalAdvances,
+      net_pay: totalCommissions - totalAdvances,
+      total_deliveries: totalDeliveries
+    });
+  });
+
+  app.post("/api/courier/:id/payout", async (req, res) => {
+    // Paga comissões
+    const { error: orderError } = await supabase
+      .from('orders')
+      .update({ commission_paid: true })
+      .eq('courier_id', req.params.id)
+      .eq('status', 'delivered')
+      .eq('commission_paid', false);
+
+    if (orderError) return res.status(500).json({ error: orderError.message });
+
+    // Compensa vales
+    await supabase
+      .from('expenses')
+      .update({ settled: true })
+      .eq('courier_id', req.params.id)
+      .eq('settled', false);
+
+    res.json({ success: true });
+  });
+
+  // Expense Management
+  app.get("/api/:orgId/expenses", async (req, res) => {
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('*')
+      .eq('org_id', req.params.orgId)
+      .order('date', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.post("/api/:orgId/expenses", async (req, res) => {
+    const { description, amount, category, date, courier_id } = req.body;
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert([{
+        description,
+        amount,
+        category,
+        date: date || new Date().toISOString(),
+        org_id: req.params.orgId,
+        courier_id: courier_id || null,
+        settled: false
+      }])
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.delete("/api/expenses/:id", async (req, res) => {
+    const { error } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -607,6 +1347,47 @@ Diretrizes:
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
+
+  // ===================================
+  // SOCKET.IO - GPS Rastreamento
+  // ===================================
+  io.on('connection', (sock) => {
+    // Courier sends their location
+    sock.on('courier:location', (data: { courierId: any, courierName: string, latitude: number, longitude: number, timestamp: number }) => {
+      // Broadcast to all clients in the courier's tracking room
+      io.to(`track:${data.courierId}`).emit('courier:location:update', data);
+      // Also store in a Map for new joiners
+      (global as any).courierLocations = (global as any).courierLocations || {};
+      (global as any).courierLocations[data.courierId] = data;
+    });
+
+    // Courier stops sharing
+    sock.on('courier:location:stop', (data: { courierId: any }) => {
+      io.to(`track:${data.courierId}`).emit('courier:location:stopped', data);
+      if ((global as any).courierLocations) {
+        delete (global as any).courierLocations[data.courierId];
+      }
+    });
+
+    // Client joins tracking room
+    sock.on('track:join', (data: { courierId: any }) => {
+      sock.join(`track:${data.courierId}`);
+      // Send last known location if available
+      const last = (global as any).courierLocations?.[data.courierId];
+      if (last) sock.emit('courier:location:update', last);
+    });
+
+    sock.on('track:leave', (data: { courierId: any }) => {
+      sock.leave(`track:${data.courierId}`);
+    });
+  });
+
+  // Get last known courier location
+  app.get('/api/courier/:courierId/location', (req, res) => {
+    const loc = (global as any).courierLocations?.[req.params.courierId];
+    if (!loc) return res.status(404).json({ error: 'Entregador sem localização ativa' });
+    res.json(loc);
+  });
 
   httpServer.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
