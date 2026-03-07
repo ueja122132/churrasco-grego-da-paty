@@ -454,6 +454,7 @@ const AppInner = () => {
   const { user } = useAuth();
   const location = useLocation();
 
+  // Fix: route "/" must be public to allow menu browsing
   const isPublicRoute =
     location.pathname === "/" ||
     location.pathname === "/login" ||
