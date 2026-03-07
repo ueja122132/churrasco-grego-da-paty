@@ -3199,62 +3199,70 @@ const AdminPage = () => {
           <div className="lg:col-span-2">
             <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="p-4 font-bold border-b bg-gray-50/50 font-black uppercase text-xs tracking-widest text-gray-400">Entregadores</div>
-              <table className="w-full text-left text-sm">
-                <tbody className="divide-y divide-gray-50">
-                  {couriers.map(c => (
-                    <tr key={c.id}>
-                      <td className="p-4">
-                        <p className="font-black text-gray-800">{c.name}</p>
-                        <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
-                          <button onClick={() => {
-                            setSelectedCourier(c);
-                            setEditCommissionValue(String(c.commission_rate || 0));
-                            setModalType('edit_commission');
-                          }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] text-gray-400 font-bold uppercase">A Receber</span>
-                          <span className="text-sm font-bold text-gray-700">R$ {(courierStats[c.id]?.total_commissions || 0).toFixed(2)}</span>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] text-gray-400 font-bold uppercase transition-all">Vales</span>
-                          <span className="text-sm font-bold text-red-500">- R$ {(courierStats[c.id]?.total_advances || 0).toFixed(2)}</span>
-                        </div>
-                      </td>
-                      <td className="p-4">
-                        <div className="flex flex-col">
-                          <span className="text-[10px] text-gray-400 font-bold uppercase">Saldo Líquido</span>
-                          <span className="text-lg font-black text-orange-600">R$ {(courierStats[c.id]?.net_pay || 0).toFixed(2)}</span>
-                        </div>
-                      </td>
-                      <td className="p-4 text-right flex gap-2 justify-end items-center">
-                        <button
-                          onClick={() => { setSelectedCourier(c); setModalType('advance'); }}
-                          className="bg-amber-100 text-amber-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all flex items-center gap-1"
-                          title="Dar Vale"
-                        >
-                          <TrendingDown size={14} /> Dar Vale
-                        </button>
-                        <button
-                          onClick={() => { setSelectedCourier(c); setModalType('payout'); }}
-                          disabled={!courierStats[c.id]?.net_pay && !courierStats[c.id]?.total_advances}
-                          className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md shadow-green-100"
-                        >
-                          Pagar Entregador
-                        </button>
-                        <button onClick={() => { setSelectedCourier(c); setModalType('delete_courier'); }} className="text-gray-300 hover:text-red-600 p-2 transition-colors"><Trash2 size={18} /></button>
-                      </td>
-                    </tr>
-                  ))}
-                  {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400">Nenhum entregador cadastrado.</td></tr>}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm min-w-[750px] whitespace-nowrap">
+                  <tbody className="divide-y divide-gray-50">
+                    {couriers.map(c => (
+                      <tr key={c.id}>
+                        <td className="p-4">
+                          <p className="font-black text-gray-800">{c.name}</p>
+                          <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
+                            <button onClick={() => {
+                              setSelectedCourier(c);
+                              setEditCommissionValue(String(c.commission_rate || 0));
+                              setModalType('edit_commission');
+                            }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase">A Receber</span>
+                            <span className="text-sm font-bold text-gray-700">R$ {(courierStats[c.id]?.total_commissions || 0).toFixed(2)}</span>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase transition-all">Vales</span>
+                            <span className="text-sm font-bold text-red-500">- R$ {(courierStats[c.id]?.total_advances || 0).toFixed(2)}</span>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-col">
+                            <span className="text-[10px] text-gray-400 font-bold uppercase">Saldo Líquido</span>
+                            <span className="text-lg font-black text-orange-600">R$ {(courierStats[c.id]?.net_pay || 0).toFixed(2)}</span>
+                          </div>
+                        </td>
+                        <td className="p-4 text-right flex gap-2 justify-end items-center">
+                          <button
+                            onClick={() => { setSelectedCourier(c); setModalType('advance'); }}
+                            className="bg-amber-100 text-amber-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all flex items-center gap-1"
+                            title="Dar Vale"
+                          >
+                            <TrendingDown size={14} /> Dar Vale
+                          </button>
+                          <button
+                            onClick={() => { setSelectedCourier(c); setModalType('payout'); }}
+                            disabled={!courierStats[c.id]?.net_pay && !courierStats[c.id]?.total_advances}
+                            className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md shadow-green-100"
+                          >
+                            Pagar Entregador
+                          </button>
+                          <button
+                            onClick={() => { setSelectedCourier(c); setModalType('delete_courier'); }}
+                            className="bg-red-50 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all flex items-center justify-center p-2"
+                            title="Excluir Entregador"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400" colSpan={5}>Nenhum entregador cadastrado.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
