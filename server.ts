@@ -85,8 +85,8 @@ async function startServer() {
       const logoUrl = branding.logoUrl || branding.logo || branding.logo_url;
 
       if (!logoUrl) {
-        console.error("[LOGO] logoUrl is missing in branding object:", branding);
-        return res.status(404).send('Logo not found (Missing URL)');
+        console.error("[LOGO] logoUrl is missing in branding object:", JSON.stringify(branding));
+        return res.status(404).send(`Logo not found. Available branding keys: ${Object.keys(branding).join(", ")}. JSON: ${JSON.stringify(branding)}`);
       }
 
       if (logoUrl.startsWith('data:image')) {
