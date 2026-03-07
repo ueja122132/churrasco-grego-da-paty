@@ -104,18 +104,16 @@ async function startServer() {
     console.log(`[LOGO] Request for logo.png`);
 
     try {
-      // For this specific app, we usually have one main org. 
-      // Fetching the first one to ensure WhatsApp always gets an image.
+      // Try by slug first (more reliable for this specific deployment)
       const { data, error } = await supabase
         .from('organizations')
         .select('branding')
-        .limit(1)
+        .eq('slug', 'churrasco-grego-da-paty')
         .single();
 
       if (error || !data || !data.branding?.logoUrl) {
-        console.error(`[LOGO] Database error or no logo found:`, error);
-        // Serve a fallback blank pixel or generic food icon if database fails
-        return res.status(404).send('Logo not configured in database');
+        console.error(`[LOGO] Database error or no logo found for slug 'churrasco-grego-da-paty':`, error);
+        return res.status(404).send('Logo not found for this organization');
       }
 
       const logoUrl = data.branding.logoUrl;
@@ -128,12 +126,11 @@ async function startServer() {
         res.writeHead(200, {
           'Content-Type': mime,
           'Content-Length': img.length,
-          'Cache-Control': 'public, max-age=3600' // 1 hour cache
+          'Cache-Control': 'public, max-age=3600'
         });
         res.end(img);
-        console.log(`[LOGO] Successfully served base64 logo as ${mime}`);
+        console.log(`[LOGO] Successfully served base64 logo for 'churrasco-grego-da-paty'`);
       } else {
-        console.log(`[LOGO] Redirecting to external URL: ${logoUrl}`);
         res.redirect(logoUrl);
       }
     } catch (err) {
