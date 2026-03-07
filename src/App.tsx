@@ -503,7 +503,7 @@ const AppInner = () => {
   return (
     <div className={cn(
       "min-h-screen transition-all duration-700 bg-[#F8FAFC]",
-      (!isPublicRoute || !!user) ? "pb-20 md:pb-0 md:pl-20" : ""
+      (!isPublicRoute) ? "pb-20 md:pb-0 md:pl-20" : ""
     )}>
       <style>{`
         :root {
@@ -527,10 +527,10 @@ const AppInner = () => {
           -webkit-text-fill-color: transparent;
         }
       `}</style>
-      {(!isPublicRoute || !!user) && <Navbar />}
+      {(!isPublicRoute) && <Navbar />}
       <main className={cn(
         "animate-in fade-in slide-in-from-bottom-4 duration-1000",
-        (isPublicRoute && !user) ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
+        (isPublicRoute) ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
       )}>
         <Routes>
           <Route path="/" element={<SalesPage />} />
