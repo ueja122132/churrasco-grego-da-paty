@@ -99,6 +99,42 @@ async function startServer() {
     }
   });
 
+  // Proxy route for Logo Image (WhatsApp/SEO compatible)
+  app.get("/logo.png", async (req, res) => {
+    const host = req.hostname;
+    try {
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('branding')
+        .eq('custom_domain', host)
+        .single();
+
+      if (error || !data || !data.branding?.logoUrl) {
+        return res.status(404).send('Logo not found');
+      }
+
+      const logoUrl = data.branding.logoUrl;
+      if (logoUrl.startsWith('data:image')) {
+        const base64Data = logoUrl.split(',')[1];
+        const img = Buffer.from(base64Data, 'base64');
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Content-Length': img.length,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        res.end(img);
+      } else {
+        res.redirect(logoUrl);
+      }
+    } catch (err) {
+      res.status(500).send('Internal Server Error');
+    }
+  });
+
+  app.get("/favicon.ico", async (req, res) => {
+    res.redirect('/logo.png');
+  });
+
   app.get("/api/org/:slug", async (req, res) => {
     console.log(`[BACKEND] Request for org: ${req.params.slug}`);
     try {

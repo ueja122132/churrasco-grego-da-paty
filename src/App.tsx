@@ -631,9 +631,18 @@ const SalesPage = () => {
   const navigate = useNavigate();
   const { notify } = useNotification();
   const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<OrderItem[]>([]);
+  const [cart, setCart] = useState<OrderItem[]>(() => {
+    const saved = localStorage.getItem('cart');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('cart', JSON.stringify(cart));
+  }, [cart]);
+
   const [isOrdering, setIsOrdering] = useState(false);
-  const [needsLogin, setNeedsLogin] = useState(false); // shows login prompt without losing cart
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const [isShopOpen, setIsShopOpen] = useState(true);
 
   // Customization Modal State
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -648,9 +657,7 @@ const SalesPage = () => {
   const [pixData, setPixData] = useState<{ qr_code: string; qr_code_base64: string; payment_id: number } | null>(null);
   const [pixLoading, setPixLoading] = useState(false);
   const [pixCopied, setPixCopied] = useState(false);
-
   const [useReward, setUseReward] = useState(false);
-  const [isShopOpen, setIsShopOpen] = useState(true);
 
   const checkIfOpen = () => {
     if (!org?.operating_hours) return true;
@@ -997,51 +1004,56 @@ const SalesPage = () => {
                       animate={{ opacity: 1, y: 0 }}
                       className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all group overflow-hidden flex flex-col h-full"
                     >
-                      <div className="relative aspect-square mb-4 rounded-3xl overflow-hidden bg-gray-50/50 flex items-center justify-center p-4">
+                      <div className="relative aspect-square mb-4 rounded-3xl overflow-hidden bg-gray-50 flex items-center justify-center p-0">
                         {product.image_url ? (
                           <img
                             src={product.image_url}
                             alt={product.name}
-                            className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-500"
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                             referrerPolicy="no-referrer"
                           />
                         ) : (
                           <UtensilsCrossed size={48} className="text-gray-200" />
                         )}
+
+                        {/* Overlay Gradient for contrast */}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-60" />
+
+                        {/* Price Badge - Premium Floating Style */}
+                        <div className="absolute bottom-3 right-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-xl border border-white/20 flex flex-col items-end">
+                          {(product as any).promotional_price != null ? (
+                            <>
+                              <span className="text-[9px] text-gray-400 line-through leading-none font-bold">R$ {product.price.toFixed(2)}</span>
+                              <div className="flex items-baseline gap-0.5 text-orange-600">
+                                <span className="text-[10px] font-black">R$</span>
+                                <span className="text-xl font-black tracking-tighter">
+                                  {Number((product as any).promotional_price).toFixed(2).split('.')[0]}
+                                  <span className="text-xs">,{Number((product as any).promotional_price).toFixed(2).split('.')[1]}</span>
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex items-baseline gap-0.5 text-orange-600">
+                              <span className="text-[10px] font-black">R$</span>
+                              <span className="text-xl font-black tracking-tighter">
+                                {product.price.toFixed(2).split('.')[0]}
+                                <span className="text-xs">,{product.price.toFixed(2).split('.')[1]}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
                         {(product as any).promotional_price != null && (
-                          <div className="absolute top-3 left-3 bg-orange-600 text-white text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-tighter shadow-lg">
-                            -{Math.round((1 - (Number((product as any).promotional_price) / product.price)) * 100)}%
+                          <div className="absolute top-3 left-3 bg-orange-600 text-white text-[9px] font-black px-2 py-1 rounded-lg uppercase tracking-wider shadow-lg">
+                            OFERTA
                           </div>
                         )}
                       </div>
 
                       <div className="flex flex-col flex-1 px-1">
-                        <h3 className="font-bold text-gray-800 text-base leading-tight group-hover:text-orange-600 transition-colors line-clamp-2 min-h-[2.5rem]">{product.name}</h3>
-                        <p className="text-xs text-gray-400 mt-2 line-clamp-2 flex-1 font-medium">{product.description}</p>
-
-                        <div className="mt-4 pt-4 border-t border-gray-50">
-                          {(product as any).promotional_price != null ? (
-                            <div className="flex flex-col">
-                              <span className="text-[10px] text-gray-400 line-through">R$ {product.price.toFixed(2)}</span>
-                              <div className="flex items-baseline gap-1">
-                                <span className="text-xs font-bold text-orange-600">R$</span>
-                                <span className="text-2xl font-black text-orange-600 tracking-tighter">
-                                  {Number((product as any).promotional_price).toFixed(2).split('.')[0]}
-                                  <span className="text-sm">,{Number((product as any).promotional_price).toFixed(2).split('.')[1]}</span>
-                                </span>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-baseline gap-1">
-                              <span className="text-xs font-bold text-orange-600">R$</span>
-                              <span className="text-2xl font-black text-orange-600 tracking-tighter">
-                                {product.price.toFixed(2).split('.')[0]}
-                                <span className="text-sm">,{product.price.toFixed(2).split('.')[1]}</span>
-                              </span>
-                            </div>
-                          )}
-                          <p className="text-[9px] text-gray-400 font-medium tracking-tight">À vista no PIX ou na Entrega</p>
-                        </div>
+                        <h3 className="font-bold text-gray-900 text-base leading-tight group-hover:text-orange-600 transition-colors line-clamp-2 min-h-[2.5rem]">{product.name}</h3>
+                        <p className="text-[11px] text-gray-400 mt-1 line-clamp-2 flex-1 font-medium italic">{product.description}</p>
+                        <p className="text-[9px] text-orange-500/70 font-bold mt-2 tracking-tight uppercase">🔥 Mais pedido hoje</p>
                       </div>
 
                       <button
