@@ -104,19 +104,21 @@ async function startServer() {
     console.log(`[LOGO] Request for logo.png`);
 
     try {
-      // Try by slug first (more reliable for this specific deployment)
+      // For this app, we assume a single-tenant setup or we serve the first org as fallback
       const { data, error } = await supabase
         .from('organizations')
         .select('branding')
-        .eq('slug', 'churrasco-grego-da-paty')
+        .limit(1)
         .single();
 
       if (error || !data || !data.branding?.logoUrl) {
-        console.error(`[LOGO] Database error or no logo found for slug 'churrasco-grego-da-paty':`, error);
-        return res.status(404).send('Logo not found for this organization');
+        console.error(`[LOGO] Database lookup failed:`, error);
+        return res.status(404).send('Logo configuration not found');
       }
 
       const logoUrl = data.branding.logoUrl;
+      console.log(`[LOGO] Found logo URL: ${logoUrl.substring(0, 50)}...`);
+
       if (logoUrl.startsWith('data:image')) {
         const parts = logoUrl.split(',');
         const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
@@ -129,7 +131,7 @@ async function startServer() {
           'Cache-Control': 'public, max-age=3600'
         });
         res.end(img);
-        console.log(`[LOGO] Successfully served base64 logo for 'churrasco-grego-da-paty'`);
+        console.log(`[LOGO] Served base64 logo successfully`);
       } else {
         res.redirect(logoUrl);
       }
