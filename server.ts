@@ -81,11 +81,12 @@ async function startServer() {
       }
 
       console.log(`[LOGO] Found organization: ${data.name}`);
-      const logoUrl = data.branding?.logoUrl;
+      const branding = data.branding || {};
+      const logoUrl = branding.logoUrl || branding.logo || branding.logo_url;
 
       if (!logoUrl) {
-        console.error("[LOGO] No logoUrl in branding:", data.branding);
-        return res.status(404).send('Logo not found (No URL)');
+        console.error("[LOGO] logoUrl is missing in branding object:", branding);
+        return res.status(404).send('Logo not found (Missing URL)');
       }
 
       if (logoUrl.startsWith('data:image')) {
