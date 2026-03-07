@@ -63,34 +63,24 @@ async function startServer() {
   app.get("/logo.png", async (req, res) => {
     console.log(`[LOGO] Request for logo.png from ${req.hostname}`);
     try {
-      // Try to find the org by hostname or just get the first one (Paty)
       const { data, error } = await supabase
         .from('organizations')
         .select('branding, name')
         .limit(1)
         .single();
 
-      if (error) {
-        console.error("[LOGO] Supabase error:", error.message);
-        return res.status(404).send(`Logo not found (DB Error: ${error.message})`);
+      // Official fallback for Paty
+      const DEFAULT_LOGO = "https://puvjebetnwhubthfckau.supabase.co/storage/v1/object/public/logos/logo-paty.png";
+
+      if (error || !data) {
+        console.warn("[LOGO] Using fallback logo");
+        return res.redirect(DEFAULT_LOGO);
       }
 
-      if (!data) {
-        console.error("[LOGO] No organization found in database");
-        return res.status(404).send('Logo not found (No Org)');
-      }
-
-      console.log(`[LOGO] Found organization: ${data.name}`);
       const branding = data.branding || {};
-      const logoUrl = branding.logoUrl || branding.logo || branding.logo_url;
-
-      if (!logoUrl) {
-        console.error("[LOGO] logoUrl is missing in branding object:", JSON.stringify(branding));
-        return res.status(404).send(`Logo not found. Available branding keys: ${Object.keys(branding).join(", ")}. JSON: ${JSON.stringify(branding)}`);
-      }
+      const logoUrl = branding.logoUrl || branding.logo || branding.logo_url || DEFAULT_LOGO;
 
       if (logoUrl.startsWith('data:image')) {
-        console.log("[LOGO] Serving Base64 image");
         const [meta, base64Data] = logoUrl.split(',');
         const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
         const img = Buffer.from(base64Data, 'base64');
@@ -102,7 +92,6 @@ async function startServer() {
         });
         res.end(img);
       } else {
-        console.log("[LOGO] Redirecting to:", logoUrl);
         res.redirect(logoUrl);
       }
     } catch (err: any) {
