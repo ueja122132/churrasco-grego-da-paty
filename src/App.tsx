@@ -91,6 +91,7 @@ interface Product {
   category: 'churrasco' | 'ready';
   image_url?: string;
   promotional_price?: number | null;
+  available?: boolean;
 }
 
 interface ExtraIngredient {
@@ -1027,79 +1028,90 @@ const SalesPage = () => {
                   {cat.label}
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {catProducts.map(product => (
-                    <motion.div
-                      key={product.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm hover:shadow-xl hover:scale-[1.02] transition-all group overflow-hidden flex flex-col h-full"
-                    >
-                      <div className="relative aspect-square mb-4 rounded-3xl overflow-hidden bg-gray-50 flex items-center justify-center p-0">
-                        {product.image_url ? (
-                          <img
-                            src={product.image_url}
-                            alt={product.name}
-                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <UtensilsCrossed size={48} className="text-gray-200" />
+                  {catProducts.map(product => {
+                    const isAvailable = product.available !== false;
+                    return (
+                      <motion.div
+                        key={product.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          "p-4 rounded-[2rem] border shadow-sm transition-all group overflow-hidden flex flex-col h-full",
+                          isAvailable ? "bg-white border-gray-100 hover:shadow-xl hover:scale-[1.02]" : "bg-gray-100 border-gray-200 opacity-70 grayscale-[0.8]"
                         )}
+                      >
+                        <div className="relative aspect-square mb-4 rounded-3xl overflow-hidden bg-gray-50 flex items-center justify-center p-0">
+                          {product.image_url ? (
+                            <img
+                              src={product.image_url}
+                              alt={product.name}
+                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <UtensilsCrossed size={48} className="text-gray-200" />
+                          )}
 
-                        {/* Overlay Gradient for contrast */}
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-60" />
+                          {/* Overlay Gradient for contrast */}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-60" />
 
-                        {/* Price Badge - Premium Floating Style */}
-                        <div className="absolute bottom-3 right-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-xl border border-white/20 flex flex-col items-end">
-                          {(product as any).promotional_price != null ? (
-                            <>
-                              <span className="text-[9px] text-gray-400 line-through leading-none font-bold">R$ {product.price.toFixed(2)}</span>
+                          {/* Price Badge - Premium Floating Style */}
+                          <div className="absolute bottom-3 right-3 bg-white/95 backdrop-blur-md px-3 py-1.5 rounded-2xl shadow-xl border border-white/20 flex flex-col items-end">
+                            {(product as any).promotional_price != null ? (
+                              <>
+                                <span className="text-[9px] text-gray-400 line-through leading-none font-bold">R$ {product.price.toFixed(2)}</span>
+                                <div className="flex items-baseline gap-0.5 text-orange-600">
+                                  <span className="text-[10px] font-black">R$</span>
+                                  <span className="text-xl font-black tracking-tighter">
+                                    {Number((product as any).promotional_price).toFixed(2).split('.')[0]}
+                                    <span className="text-xs">,{Number((product as any).promotional_price).toFixed(2).split('.')[1]}</span>
+                                  </span>
+                                </div>
+                              </>
+                            ) : (
                               <div className="flex items-baseline gap-0.5 text-orange-600">
                                 <span className="text-[10px] font-black">R$</span>
                                 <span className="text-xl font-black tracking-tighter">
-                                  {Number((product as any).promotional_price).toFixed(2).split('.')[0]}
-                                  <span className="text-xs">,{Number((product as any).promotional_price).toFixed(2).split('.')[1]}</span>
+                                  {product.price.toFixed(2).split('.')[0]}
+                                  <span className="text-xs">,{product.price.toFixed(2).split('.')[1]}</span>
                                 </span>
                               </div>
-                            </>
-                          ) : (
-                            <div className="flex items-baseline gap-0.5 text-orange-600">
-                              <span className="text-[10px] font-black">R$</span>
-                              <span className="text-xl font-black tracking-tighter">
-                                {product.price.toFixed(2).split('.')[0]}
-                                <span className="text-xs">,{product.price.toFixed(2).split('.')[1]}</span>
-                              </span>
+                            )}
+                          </div>
+
+                          {(product as any).promotional_price != null && isAvailable && (
+                            <div className="absolute top-3 left-3 bg-orange-600 text-white text-[9px] font-black px-2 py-1 rounded-lg uppercase tracking-wider shadow-lg">
+                              OFERTA
+                            </div>
+                          )}
+                          {!isAvailable && (
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/80 text-white text-lg font-black px-4 py-2 rounded-xl border border-white/20 whitespace-nowrap shadow-2xl backdrop-blur-md z-10 uppercase tracking-widest rotate-[-10deg]">
+                              Esgotado
                             </div>
                           )}
                         </div>
 
-                        {(product as any).promotional_price != null && (
-                          <div className="absolute top-3 left-3 bg-orange-600 text-white text-[9px] font-black px-2 py-1 rounded-lg uppercase tracking-wider shadow-lg">
-                            OFERTA
-                          </div>
-                        )}
-                      </div>
+                        <div className="flex flex-col flex-1 px-1">
+                          <h3 className="font-bold text-gray-900 text-base leading-tight group-hover:text-orange-600 transition-colors line-clamp-2 min-h-[2.5rem]">{product.name}</h3>
+                          <p className="text-[11px] text-gray-400 mt-1 line-clamp-2 flex-1 font-medium italic">{product.description}</p>
+                          <p className="text-[9px] text-orange-500/70 font-bold mt-2 tracking-tight uppercase">🔥 Mais pedido hoje</p>
+                        </div>
 
-                      <div className="flex flex-col flex-1 px-1">
-                        <h3 className="font-bold text-gray-900 text-base leading-tight group-hover:text-orange-600 transition-colors line-clamp-2 min-h-[2.5rem]">{product.name}</h3>
-                        <p className="text-[11px] text-gray-400 mt-1 line-clamp-2 flex-1 font-medium italic">{product.description}</p>
-                        <p className="text-[9px] text-orange-500/70 font-bold mt-2 tracking-tight uppercase">🔥 Mais pedido hoje</p>
-                      </div>
-
-                      <button
-                        onClick={() => handleAddClick(product)}
-                        disabled={!isShopOpen}
-                        className={cn(
-                          "mt-6 w-full py-3 rounded-2xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95",
-                          !isShopOpen
-                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : "bg-slate-100 text-slate-900 hover:bg-orange-600 hover:text-white group-hover:shadow-lg group-hover:shadow-orange-200"
-                        )}
-                      >
-                        <Plus size={16} strokeWidth={3} /> {isShopOpen ? "Adicionar" : "Loja Fechada"}
-                      </button>
-                    </motion.div>
-                  ))}
+                        <button
+                          onClick={() => isAvailable && handleAddClick(product)}
+                          disabled={!isShopOpen || !isAvailable}
+                          className={cn(
+                            "mt-6 w-full py-3 rounded-2xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-all active:scale-95",
+                            (!isShopOpen || !isAvailable)
+                              ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                              : "bg-slate-100 text-slate-900 hover:bg-orange-600 hover:text-white group-hover:shadow-lg group-hover:shadow-orange-200"
+                          )}
+                        >
+                          <Plus size={16} strokeWidth={3} /> {(!isAvailable) ? "Esgotado" : (!isShopOpen ? "Loja Fechada" : "Adicionar")}
+                        </button>
+                      </motion.div>
+                    )
+                  })}
                 </div>
               </div>
             );
@@ -2492,6 +2504,7 @@ const AdminPage = () => {
   const [ingredients, setIngredients] = useState("");
   const [category, setCategory] = useState<'churrasco' | 'ready'>('churrasco');
   const [imageUrl, setImageUrl] = useState("");
+  const [available, setAvailable] = useState<boolean>(true);
 
   const [extraName, setExtraName] = useState("");
   const [extraPrice, setExtraPrice] = useState("");
@@ -2765,12 +2778,13 @@ const AdminPage = () => {
     setIngredients(product.ingredients);
     setCategory(product.category);
     setImageUrl(product.image_url || "");
+    setAvailable(product.available !== false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const cancelEdit = () => {
     setEditingProduct(null);
-    setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl("");
+    setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl(""); setAvailable(true);
   };
 
   const saveProduct = async (e: React.FormEvent) => {
@@ -2781,11 +2795,11 @@ const AdminPage = () => {
         const res = await fetch(`/api/products/${editingProduct.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl })
+          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl, available })
         });
         if (!res.ok) throw new Error("Erro ao atualizar produto");
         setProducts(products.map(p => p.id === editingProduct.id
-          ? { ...p, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }
+          ? { ...p, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl, available }
           : p
         ));
         setEditingProduct(null);
@@ -2795,17 +2809,17 @@ const AdminPage = () => {
         const res = await fetch(`/api/${org?.id}/products`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl })
+          body: JSON.stringify({ name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl, available })
         });
         if (!res.ok) {
           const errorData = await res.json();
           throw new Error(errorData.error || "Erro ao salvar produto");
         }
         const data = await res.json();
-        setProducts([...products, { id: data.id, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl }]);
+        setProducts([...products, { id: data.id, name, description, price: parseFloat(price), ingredients, category, image_url: imageUrl, available }]);
         notify("Produto salvo com sucesso!", "success");
       }
-      setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl("");
+      setName(""); setDescription(""); setPrice(""); setIngredients(""); setImageUrl(""); setAvailable(true);
     } catch (err: any) {
       console.error("Erro ao salvar produto:", err);
       notify(err.message || "Erro ao salvar produto.", "error");
@@ -3044,6 +3058,18 @@ const AdminPage = () => {
                   />
                 </div>
               )}
+              <div className="flex items-center gap-3 mt-4 mb-2 p-4 bg-gray-50/80 rounded-2xl border border-gray-200">
+                <input
+                  type="checkbox"
+                  id="product-available"
+                  checked={available}
+                  onChange={(e) => setAvailable(e.target.checked)}
+                  className="w-5 h-5 text-orange-600 rounded border-gray-300 focus:ring-orange-500 outline-none cursor-pointer"
+                />
+                <label htmlFor="product-available" className="text-sm font-bold text-gray-700 cursor-pointer select-none">
+                  Produto Disponível para Venda
+                </label>
+              </div>
               <button className={cn(
                 "w-full py-3 rounded-2xl font-bold transition-colors",
                 editingProduct
@@ -3093,6 +3119,11 @@ const AdminPage = () => {
                               )}>
                                 {product.category === 'churrasco' ? 'Grego' : 'Pronto'}
                               </span>
+                              {product.available === false && (
+                                <span className="text-[8px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-bold uppercase border border-red-200">
+                                  Esgotado
+                                </span>
+                              )}
                             </div>
                             <p className="text-xs text-gray-400 truncate max-w-xs">{product.ingredients || 'Sem ingredientes cadastrados'}</p>
                           </div>
@@ -3210,216 +3241,220 @@ const AdminPage = () => {
               </table>
             </div>
           </div>
-        </div>
+        </div >
       )}
 
-      {activeTab === 'couriers' && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-1">
-            <form onSubmit={saveCourier} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
-              <h2 className="text-xl font-bold">Novo Entregador</h2>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
-                <input required autoComplete="new-password" value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
-                <input required autoComplete="new-password" value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
-                <input required type="password" autoComplete="new-password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
-                <input required type="number" step="0.01" min="0" max="100" value={newCourierCommission} onChange={e => setNewCourierCommission(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ex: 15" />
-              </div>
-              <button type="submit" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
-            </form>
-          </div>
-          <div className="lg:col-span-2">
-            <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
-              <div className="p-4 font-bold border-b bg-gray-50/50 font-black uppercase text-xs tracking-widest text-gray-400">Entregadores</div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm min-w-[750px] whitespace-nowrap">
-                  <tbody className="divide-y divide-gray-50">
-                    {couriers.map(c => (
-                      <tr key={c.id}>
-                        <td className="p-4">
-                          <p className="font-black text-gray-800">{c.name}</p>
-                          <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
-                            <button onClick={() => {
-                              setSelectedCourier(c);
-                              setEditCommissionValue(String(c.commission_rate || 0));
-                              setModalType('edit_commission');
-                            }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
-                          </div>
-                        </td>
-                        <td className="p-4">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-gray-400 font-bold uppercase">A Receber</span>
-                            <span className="text-sm font-bold text-gray-700">R$ {(courierStats[c.id]?.total_commissions || 0).toFixed(2)}</span>
-                          </div>
-                        </td>
-                        <td className="p-4">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-gray-400 font-bold uppercase transition-all">Vales</span>
-                            <span className="text-sm font-bold text-red-500">- R$ {(courierStats[c.id]?.total_advances || 0).toFixed(2)}</span>
-                          </div>
-                        </td>
-                        <td className="p-4">
-                          <div className="flex flex-col">
-                            <span className="text-[10px] text-gray-400 font-bold uppercase">Saldo Líquido</span>
-                            <span className="text-lg font-black text-orange-600">R$ {(courierStats[c.id]?.net_pay || 0).toFixed(2)}</span>
-                          </div>
-                        </td>
-                        <td className="p-4 text-right flex gap-2 justify-end items-center">
-                          <button
-                            onClick={() => { setSelectedCourier(c); setModalType('advance'); }}
-                            className="bg-amber-100 text-amber-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all flex items-center gap-1"
-                            title="Dar Vale"
-                          >
-                            <TrendingDown size={14} /> Dar Vale
-                          </button>
-                          <button
-                            onClick={() => { setSelectedCourier(c); setModalType('payout'); }}
-                            disabled={!courierStats[c.id]?.net_pay && !courierStats[c.id]?.total_advances}
-                            className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md shadow-green-100"
-                          >
-                            Pagar Entregador
-                          </button>
-                          <button
-                            onClick={() => { setSelectedCourier(c); setModalType('delete_courier'); }}
-                            className="bg-red-50 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all flex items-center justify-center p-2"
-                            title="Excluir Entregador"
-                          >
-                            <Trash2 size={18} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400" colSpan={5}>Nenhum entregador cadastrado.</td></tr>}
-                  </tbody>
-                </table>
+      {
+        activeTab === 'couriers' && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-1">
+              <form onSubmit={saveCourier} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
+                <h2 className="text-xl font-bold">Novo Entregador</h2>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
+                  <input required autoComplete="new-password" value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
+                  <input required autoComplete="new-password" value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
+                  <input required type="password" autoComplete="new-password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
+                  <input required type="number" step="0.01" min="0" max="100" value={newCourierCommission} onChange={e => setNewCourierCommission(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ex: 15" />
+                </div>
+                <button type="submit" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
+              </form>
+            </div>
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+                <div className="p-4 font-bold border-b bg-gray-50/50 font-black uppercase text-xs tracking-widest text-gray-400">Entregadores</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm min-w-[750px] whitespace-nowrap">
+                    <tbody className="divide-y divide-gray-50">
+                      {couriers.map(c => (
+                        <tr key={c.id}>
+                          <td className="p-4">
+                            <p className="font-black text-gray-800">{c.name}</p>
+                            <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
+                              <button onClick={() => {
+                                setSelectedCourier(c);
+                                setEditCommissionValue(String(c.commission_rate || 0));
+                                setModalType('edit_commission');
+                              }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-gray-400 font-bold uppercase">A Receber</span>
+                              <span className="text-sm font-bold text-gray-700">R$ {(courierStats[c.id]?.total_commissions || 0).toFixed(2)}</span>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-gray-400 font-bold uppercase transition-all">Vales</span>
+                              <span className="text-sm font-bold text-red-500">- R$ {(courierStats[c.id]?.total_advances || 0).toFixed(2)}</span>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-gray-400 font-bold uppercase">Saldo Líquido</span>
+                              <span className="text-lg font-black text-orange-600">R$ {(courierStats[c.id]?.net_pay || 0).toFixed(2)}</span>
+                            </div>
+                          </td>
+                          <td className="p-4 text-right flex gap-2 justify-end items-center">
+                            <button
+                              onClick={() => { setSelectedCourier(c); setModalType('advance'); }}
+                              className="bg-amber-100 text-amber-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-amber-200 transition-all flex items-center gap-1"
+                              title="Dar Vale"
+                            >
+                              <TrendingDown size={14} /> Dar Vale
+                            </button>
+                            <button
+                              onClick={() => { setSelectedCourier(c); setModalType('payout'); }}
+                              disabled={!courierStats[c.id]?.net_pay && !courierStats[c.id]?.total_advances}
+                              className="bg-green-600 text-white px-4 py-2 rounded-xl text-xs font-bold hover:bg-green-700 disabled:opacity-30 transition-all shadow-md shadow-green-100"
+                            >
+                              Pagar Entregador
+                            </button>
+                            <button
+                              onClick={() => { setSelectedCourier(c); setModalType('delete_courier'); }}
+                              className="bg-red-50 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 transition-all flex items-center justify-center p-2"
+                              title="Excluir Entregador"
+                            >
+                              <Trash2 size={18} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400" colSpan={5}>Nenhum entregador cadastrado.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {activeTab === 'settings' && (
-        <div className="space-y-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      {
+        activeTab === 'settings' && (
+          <div className="space-y-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+                <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Store className="text-blue-500" /> Logotipo</h2>
+                {logoPreview && <img src={logoPreview} className="h-20 mb-6 mx-auto object-contain p-2 border rounded-xl" />}
+                <label className="block cursor-pointer bg-blue-600 text-white text-center py-4 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-xl">
+                  <input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onloadend = () => { setLogoPreview(r.result as string); saveLogo(r.result as string); }; r.readAsDataURL(f); } }} />
+                  {logoSaving ? "Enviando..." : "Alterar Logotipo"}
+                </label>
+              </div>
+              <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+                <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><QrCode className="text-emerald-500" /> Mercado Pago</h2>
+                <input type="password" value={mpToken} onChange={e => setMpToken(e.target.value)} className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl mb-4 font-mono outline-none focus:border-emerald-500" placeholder="APP_USR-..." />
+                <button onClick={saveMpToken} className="w-full py-4 bg-black text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-800 transition-all shadow-xl font-bold">
+                  {mpSaving ? "Salvando..." : mpSaved ? "Configuração Salva!" : "Ativar Mercado Pago"}
+                </button>
+              </div>
+            </div>
+
             <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
-              <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><Store className="text-blue-500" /> Logotipo</h2>
-              {logoPreview && <img src={logoPreview} className="h-20 mb-6 mx-auto object-contain p-2 border rounded-xl" />}
-              <label className="block cursor-pointer bg-blue-600 text-white text-center py-4 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-blue-700 transition-all shadow-xl">
-                <input type="file" className="hidden" accept="image/*" onChange={e => { const f = e.target.files?.[0]; if (f) { const r = new FileReader(); r.onloadend = () => { setLogoPreview(r.result as string); saveLogo(r.result as string); }; r.readAsDataURL(f); } }} />
-                {logoSaving ? "Enviando..." : "Alterar Logotipo"}
-              </label>
-            </div>
-            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
-              <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><QrCode className="text-emerald-500" /> Mercado Pago</h2>
-              <input type="password" value={mpToken} onChange={e => setMpToken(e.target.value)} className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl mb-4 font-mono outline-none focus:border-emerald-500" placeholder="APP_USR-..." />
-              <button onClick={saveMpToken} className="w-full py-4 bg-black text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-800 transition-all shadow-xl font-bold">
-                {mpSaving ? "Salvando..." : mpSaved ? "Configuração Salva!" : "Ativar Mercado Pago"}
-              </button>
-            </div>
-          </div>
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold flex items-center gap-2"><Clock className="text-orange-500" /> Horário de Funcionamento</h2>
+                <button
+                  onClick={() => saveHours()}
+                  disabled={hoursSaving}
+                  className="bg-orange-600 text-white px-6 py-2 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-orange-700 disabled:opacity-30 transition-all shadow-lg font-bold"
+                >
+                  {hoursSaving ? "Salvando..." : "Salvar Horários"}
+                </button>
+              </div>
 
-          <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold flex items-center gap-2"><Clock className="text-orange-500" /> Horário de Funcionamento</h2>
-              <button
-                onClick={() => saveHours()}
-                disabled={hoursSaving}
-                className="bg-orange-600 text-white px-6 py-2 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-orange-700 disabled:opacity-30 transition-all shadow-lg font-bold"
-              >
-                {hoursSaving ? "Salvando..." : "Salvar Horários"}
-              </button>
-            </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => {
+                  const dayLabel = {
+                    monday: 'Segunda', tuesday: 'Terça', wednesday: 'Quarta',
+                    thursday: 'Quinta', friday: 'Sexta', saturday: 'Sábado', sunday: 'Domingo'
+                  }[day as keyof typeof operatingHours];
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => {
-                const dayLabel = {
-                  monday: 'Segunda', tuesday: 'Terça', wednesday: 'Quarta',
-                  thursday: 'Quinta', friday: 'Sexta', saturday: 'Sábado', sunday: 'Domingo'
-                }[day as keyof typeof operatingHours];
+                  const config = (operatingHours && (operatingHours as any)[day]) || { open: '00:00', close: '23:59', closed: false };
 
-                const config = (operatingHours && (operatingHours as any)[day]) || { open: '00:00', close: '23:59', closed: false };
-
-                return (
-                  <div key={day} className={`p-4 rounded-2xl border-2 transition-all ${config.closed ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-orange-50'}`}>
-                    <div className="flex justify-between items-center mb-3">
-                      <span className="font-bold text-gray-800">{dayLabel}</span>
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={config.closed}
-                          onChange={e => {
-                            const newHours = { ...operatingHours, [day]: { ...config, closed: e.target.checked } };
-                            setOperatingHours(newHours);
-                          }}
-                          className="w-4 h-4 accent-orange-500"
-                        />
-                        <span className="text-[10px] font-black uppercase text-gray-400 font-bold">Fechado</span>
-                      </label>
-                    </div>
-                    {!config.closed && (
-                      <div className="flex items-center gap-1 w-full min-w-0">
-                        <input
-                          type="time"
-                          value={config.open}
-                          onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, open: e.target.value } })}
-                          className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
-                        />
-                        <span className="text-gray-300 text-xs shrink-0">às</span>
-                        <input
-                          type="time"
-                          value={config.close}
-                          onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, close: e.target.value } })}
-                          className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
-                        />
+                  return (
+                    <div key={day} className={`p-4 rounded-2xl border-2 transition-all ${config.closed ? 'bg-gray-50 border-gray-100 opacity-60' : 'bg-white border-orange-50'}`}>
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="font-bold text-gray-800">{dayLabel}</span>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={config.closed}
+                            onChange={e => {
+                              const newHours = { ...operatingHours, [day]: { ...config, closed: e.target.checked } };
+                              setOperatingHours(newHours);
+                            }}
+                            className="w-4 h-4 accent-orange-500"
+                          />
+                          <span className="text-[10px] font-black uppercase text-gray-400 font-bold">Fechado</span>
+                        </label>
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                      {!config.closed && (
+                        <div className="flex items-center gap-1 w-full min-w-0">
+                          <input
+                            type="time"
+                            value={config.open}
+                            onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, open: e.target.value } })}
+                            className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
+                          />
+                          <span className="text-gray-300 text-xs shrink-0">às</span>
+                          <input
+                            type="time"
+                            value={config.close}
+                            onChange={e => setOperatingHours({ ...operatingHours, [day]: { ...config, close: e.target.value } })}
+                            className="flex-1 min-w-0 bg-gray-50 border border-gray-100 rounded-lg px-1 py-2 text-xs font-bold outline-none focus:border-orange-500 w-0"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
+              <div className="p-4 font-bold border-b bg-gray-50/50 flex items-center gap-2 text-red-600 uppercase text-[10px] tracking-widest"><TrendingDown size={18} /> Promoções de Produtos</div>
+              <table className="w-full text-left text-sm">
+                <thead className="bg-gray-50 border-b font-bold text-gray-400">
+                  <tr><th className="p-4">Produto</th><th className="p-4">Original</th><th className="p-4 text-red-600">Promoção</th><th className="p-4 text-right">Ação</th></tr>
+                </thead>
+                <tbody>
+                  {products.map(p => (
+                    <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                      <td className="p-4 font-bold">{p.name}</td>
+                      <td className="p-4 text-gray-400 line-through font-mono">R$ {p.price.toFixed(2)}</td>
+                      <td className="p-4">
+                        {editingPromo === p.id ? (
+                          <input type="number" step="0.01" value={promoPrice} onChange={e => setPromoPrice(e.target.value)} className="w-24 px-2 py-1 border rounded-lg font-bold" autoFocus onBlur={() => savePromo(p.id)} />
+                        ) : (p as any).promotional_price ? (
+                          <span className="font-black text-red-600">R$ {Number((p as any).promotional_price).toFixed(2)}</span>
+                        ) : (
+                          <span className="text-gray-200 italic text-xs">Sem promo</span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right">
+                        <button onClick={() => { setEditingPromo(p.id); setPromoPrice((p as any).promotional_price?.toString() || ""); }} className="text-orange-400 p-2"><Pencil size={18} /></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
-
-          <div className="bg-white rounded-3xl border border-gray-200 shadow-lg overflow-hidden">
-            <div className="p-4 font-bold border-b bg-gray-50/50 flex items-center gap-2 text-red-600 uppercase text-[10px] tracking-widest"><TrendingDown size={18} /> Promoções de Produtos</div>
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 border-b font-bold text-gray-400">
-                <tr><th className="p-4">Produto</th><th className="p-4">Original</th><th className="p-4 text-red-600">Promoção</th><th className="p-4 text-right">Ação</th></tr>
-              </thead>
-              <tbody>
-                {products.map(p => (
-                  <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                    <td className="p-4 font-bold">{p.name}</td>
-                    <td className="p-4 text-gray-400 line-through font-mono">R$ {p.price.toFixed(2)}</td>
-                    <td className="p-4">
-                      {editingPromo === p.id ? (
-                        <input type="number" step="0.01" value={promoPrice} onChange={e => setPromoPrice(e.target.value)} className="w-24 px-2 py-1 border rounded-lg font-bold" autoFocus onBlur={() => savePromo(p.id)} />
-                      ) : (p as any).promotional_price ? (
-                        <span className="font-black text-red-600">R$ {Number((p as any).promotional_price).toFixed(2)}</span>
-                      ) : (
-                        <span className="text-gray-200 italic text-xs">Sem promo</span>
-                      )}
-                    </td>
-                    <td className="p-4 text-right">
-                      <button onClick={() => { setEditingPromo(p.id); setPromoPrice((p as any).promotional_price?.toString() || ""); }} className="text-orange-400 p-2"><Pencil size={18} /></button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Courier Modals */}
       <AnimatePresence>
@@ -3562,7 +3597,7 @@ const AdminPage = () => {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </div >
   );
 };
 

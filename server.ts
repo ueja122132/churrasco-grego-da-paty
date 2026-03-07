@@ -1041,9 +1041,9 @@ async function startServer() {
   });
 
   app.post("/api/:orgId/products", async (req, res) => {
-    const { name, description, price, ingredients, category = 'churrasco', image_url } = req.body;
+    const { name, description, price, ingredients, category = 'churrasco', image_url, available } = req.body;
     const { data } = await supabase.from('products').insert([{
-      name, description, price, ingredients, category, image_url, org_id: req.params.orgId
+      name, description, price, ingredients, category, image_url, available: available !== false, org_id: req.params.orgId
     }]).select();
     res.json(data?.[0]);
   });
@@ -1054,9 +1054,12 @@ async function startServer() {
   });
 
   app.patch("/api/products/:id", async (req, res) => {
-    const { name, description, price, ingredients, category, image_url } = req.body;
+    const { name, description, price, ingredients, category, image_url, available } = req.body;
+    const updatePayload: any = { name, description, price, ingredients, category, image_url };
+    if (available !== undefined) updatePayload.available = available;
+
     const { data, error } = await supabase.from('products')
-      .update({ name, description, price, ingredients, category, image_url })
+      .update(updatePayload)
       .eq('id', req.params.id)
       .select()
       .single();
