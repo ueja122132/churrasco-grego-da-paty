@@ -57,6 +57,51 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+  // ==========================================
+  // LOGO & FAVICON - CRITICAL FOR WHATSAPP/SEO
+  // ==========================================
+  app.get("/logo.png", async (req, res) => {
+    console.log(`[LOGO] Request for logo.png from ${req.hostname}`);
+    try {
+      // Try to find the org by hostname or just get the first one (Paty)
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('branding, name')
+        .limit(1)
+        .single();
+
+      if (error || !data || !data.branding?.logoUrl) {
+        console.error("[LOGO] Organization or logo not found in database");
+        return res.status(404).send('Logo not found');
+      }
+
+      console.log(`[LOGO] Serving logo for ${data.name}`);
+      const logoUrl = data.branding.logoUrl;
+
+      if (logoUrl.startsWith('data:image')) {
+        const [meta, base64Data] = logoUrl.split(',');
+        const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
+        const img = Buffer.from(base64Data, 'base64');
+
+        res.writeHead(200, {
+          'Content-Type': mime,
+          'Content-Length': img.length,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        res.end(img);
+      } else {
+        res.redirect(logoUrl);
+      }
+    } catch (err) {
+      console.error("[LOGO] Error serving logo:", err);
+      res.status(500).send('Internal Server Error');
+    }
+  });
+
+  app.get("/favicon.ico", (req, res) => {
+    res.redirect('/logo.png');
+  });
+
   // SaaS Tenant Lookup via Domain or Slug
   app.get("/api/org/detect", async (req, res) => {
     const host = req.query.host as string || req.hostname;
@@ -97,41 +142,6 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: "Erro interno" });
     }
-  });
-  // Proxy route for Logo Image (WhatsApp/SEO compatible)
-  app.get("/logo.png", async (req, res) => {
-    try {
-      // Get the first organization for this simple instance
-      const { data, error } = await supabase
-        .from('organizations')
-        .select('branding')
-        .limit(1)
-        .single();
-
-      if (error || !data || !data.branding?.logoUrl) {
-        return res.status(404).send('Logo not found');
-      }
-
-      const logoUrl = data.branding.logoUrl;
-      if (logoUrl.startsWith('data:image')) {
-        const base64Data = logoUrl.split(',')[1];
-        const img = Buffer.from(base64Data, 'base64');
-        res.writeHead(200, {
-          'Content-Type': 'image/png',
-          'Content-Length': img.length,
-          'Cache-Control': 'public, max-age=86400'
-        });
-        res.end(img);
-      } else {
-        res.redirect(logoUrl);
-      }
-    } catch (err) {
-      res.status(500).send('Internal Server Error');
-    }
-  });
-
-  app.get("/favicon.ico", (req, res) => {
-    res.redirect('/logo.png');
   });
 
 
