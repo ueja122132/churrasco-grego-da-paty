@@ -292,8 +292,13 @@ const Navbar = () => {
         <motion.div
           animate={{ rotate: isConnected ? 360 : 0 }}
           transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-white shadow-sm border border-gray-100"
         >
-          <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
+          {org?.branding?.logoUrl ? (
+            <img src={org.branding.logoUrl} alt={org.name} className="w-full h-full object-contain" />
+          ) : (
+            <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
+          )}
         </motion.div>
         <div
           className={cn(
@@ -1564,11 +1569,17 @@ const KitchenPage = () => {
   }, [org, playAlert, showPushNotif]);
 
   const updateStatus = async (id: number, status: string) => {
-    await fetch(`/api/orders/${id}/status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status })
-    });
+    try {
+      const res = await fetch(`/api/orders/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('Falha ao atualizar status');
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao atualizar o status do pedido");
+    }
   };
 
   const confirmDeliveryPayment = async (orderId: number) => {
@@ -1762,11 +1773,17 @@ const DeliveryPage = () => {
   }, [selectedCourierId, showDispatchModal, couriers]);
 
   const updateStatus = async (id: number, status: string) => {
-    await fetch(`/api/orders/${id}/status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status })
-    });
+    try {
+      const res = await fetch(`/api/orders/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('Falha ao atualizar status');
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao atualizar o status do pedido");
+    }
   };
 
   const confirmPaymentAndDeliver = async (order: Order) => {
@@ -4783,11 +4800,17 @@ const CourierPage = () => {
   };
 
   const updateStatus = async (id: number, status: string) => {
-    await fetch(`/api/orders/${id}/status`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status })
-    });
+    try {
+      const res = await fetch(`/api/orders/${id}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status })
+      });
+      if (!res.ok) throw new Error('Falha ao atualizar status');
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao atualizar o status do pedido");
+    }
   };
 
   const confirmPaymentAndDeliver = async (order: Order) => {

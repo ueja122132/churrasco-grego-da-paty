@@ -1189,13 +1189,15 @@ async function startServer() {
       }
     }
 
+    console.log(`[Status Update] Order ID: ${orderId}, New Status: ${status}`);
     const { error: updateError } = await supabase.from('orders').update({ status }).eq('id', orderId);
 
     if (updateError) {
-      console.error("[Server] Error updating order status:", updateError);
+      console.error("[Status Update Error]:", updateError);
       return res.status(500).json({ error: "Erro ao atualizar status no banco de dados." });
     }
 
+    console.log(`[Status Update Success] Order ${orderId} is now ${status}`);
     io.emit("order:update", { id: parseInt(orderId), status });
     res.json({ success: true });
   });
