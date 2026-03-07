@@ -79,6 +79,7 @@ interface User {
   address?: string;
   latitude?: number;
   longitude?: number;
+  commission_rate?: number;
 }
 
 interface Product {
@@ -496,7 +497,7 @@ const AppInner = () => {
   return (
     <div className={cn(
       "min-h-screen transition-all duration-700 bg-[#F8FAFC]",
-      !isPublicRoute ? "pb-20 md:pb-0 md:pl-20" : ""
+      (!isPublicRoute || !!user) ? "pb-20 md:pb-0 md:pl-20" : ""
     )}>
       <style>{`
         :root {
@@ -520,10 +521,10 @@ const AppInner = () => {
           -webkit-text-fill-color: transparent;
         }
       `}</style>
-      {!isPublicRoute && <Navbar />}
+      {(!isPublicRoute || !!user) && <Navbar />}
       <main className={cn(
         "animate-in fade-in slide-in-from-bottom-4 duration-1000",
-        isPublicRoute ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
+        (isPublicRoute && !user) ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
       )}>
         <Routes>
           <Route path="/" element={<SalesPage />} />
@@ -1724,6 +1725,18 @@ const DeliveryPage = () => {
 
   const { org } = useTenant();
 
+  useEffect(() => {
+    if (showDispatchModal && selectedCourierId) {
+      const selectedCourier = couriers.find(c => String(c.id) === String(selectedCourierId));
+      if (selectedCourier && selectedCourier.commission_rate) {
+        const fee = (showDispatchModal.total_price * (selectedCourier.commission_rate / 100)).toFixed(2);
+        setDeliveryFee(fee);
+      } else {
+        setDeliveryFee("0");
+      }
+    }
+  }, [selectedCourierId, showDispatchModal, couriers]);
+
   const updateStatus = async (id: number, status: string) => {
     await fetch(`/api/orders/${id}/status`, {
       method: "PATCH",
@@ -2448,6 +2461,7 @@ const AdminPage = () => {
   const [newCourierName, setNewCourierName] = useState("");
   const [newCourierPhone, setNewCourierPhone] = useState("");
   const [newCourierPassword, setNewCourierPassword] = useState("");
+  const [newCourierCommission, setNewCourierCommission] = useState("0");
   const [modalType, setModalType] = useState<'payout' | 'advance' | null>(null);
   const [selectedCourier, setSelectedCourier] = useState<User | null>(null);
   const [advanceAmount, setAdvanceAmount] = useState("");
@@ -2580,7 +2594,8 @@ const AdminPage = () => {
           phone: newCourierPhone,
           password: newCourierPassword,
           role: 'courier',
-          org_id: org.id
+          org_id: org.id,
+          commission_rate: parseFloat(newCourierCommission) || 0
         })
       });
 
@@ -2592,6 +2607,7 @@ const AdminPage = () => {
         setNewCourierName("");
         setNewCourierPhone("");
         setNewCourierPassword("");
+        setNewCourierCommission("0");
         notify("Entregador cadastrado com sucesso!", "success");
       } else {
         const errorData = await resSimple.json();
@@ -3173,6 +3189,10 @@ const AdminPage = () => {
                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
                 <input required type="password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
               </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
+                <input required type="number" step="0.01" min="0" max="100" value={newCourierCommission} onChange={e => setNewCourierCommission(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ex: 15" />
+              </div>
               <button type="submit" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
             </form>
           </div>
@@ -3186,6 +3206,27 @@ const AdminPage = () => {
                       <td className="p-4">
                         <p className="font-black text-gray-800">{c.name}</p>
                         <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
+                          <button onClick={async () => {
+                            const val = prompt('Nova comissão (%):', String(c.commission_rate || 0));
+                            if (val !== null && !isNaN(parseFloat(val))) {
+                              try {
+                                const res = await fetch(`/api/couriers/${c.id}/commission`, {
+                                  method: 'PATCH',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ commission_rate: parseFloat(val) })
+                                });
+                                if (res.ok) {
+                                  setCouriers(couriers.map(courier => courier.id === c.id ? { ...courier, commission_rate: parseFloat(val) } : courier));
+                                  notify('Comissão atualizada com sucesso!', 'success');
+                                }
+                              } catch (e) {
+                                notify('Erro ao atualizar', 'error');
+                              }
+                            }
+                          }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
+                        </div>
                       </td>
                       <td className="p-4">
                         <div className="flex flex-col">

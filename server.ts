@@ -820,11 +820,11 @@ async function startServer() {
 
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
-    const { name, phone, password, role, org_id } = req.body;
+    const { name, phone, password, role, org_id, commission_rate } = req.body;
     try {
       // Para compatibilidade, inserimos no perfil com suporte a cargo e organização
       const { data, error } = await supabase.from('profiles').insert([{
-        name, phone, password: hashPassword(password), role: role || 'user', org_id: org_id || null, points: 0
+        name, phone, password: hashPassword(password), role: role || 'user', org_id: org_id || null, points: 0, commission_rate: commission_rate || 0
       }]).select();
       if (error) throw error;
       res.json(data[0]);
@@ -1237,19 +1237,25 @@ Diretrizes:
   app.get("/api/:orgId/couriers", async (req, res) => {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, name, phone')
+      .select('id, name, phone, commission_rate')
       .eq('org_id', req.params.orgId)
       .eq('role', 'courier');
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
 
+  app.patch("/api/couriers/:id/commission", async (req, res) => {
+    const { commission_rate } = req.body;
+    const { error } = await supabase.rpc('admin_update_commission', {
+      user_id: req.params.id,
+      new_rate: commission_rate
+    });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+  });
+
   app.delete("/api/couriers/:id", async (req, res) => {
-    const { error } = await supabase
-      .from('profiles')
-      .delete()
-      .eq('id', req.params.id)
-      .eq('role', 'courier'); // Segurança extra para deletar apenas entregadores
+    const { error } = await supabase.rpc('admin_delete_profile', { user_id: req.params.id });
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
