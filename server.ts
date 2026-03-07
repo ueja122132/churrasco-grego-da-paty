@@ -1338,6 +1338,33 @@ Diretrizes:
     res.json({ success: true });
   });
 
+  // Organization Settings Updates
+  app.patch("/api/organizations/:id/logo", async (req, res) => {
+    const { logo_url } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ branding: { logoUrl: logo_url } })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.patch("/api/organizations/:id/mp-token", async (req, res) => {
+    const { mp_access_token } = req.body;
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ mp_access_token: mp_access_token, has_mp_token: true })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
   // Expense Management
   app.get("/api/:orgId/expenses", async (req, res) => {
     const { data, error } = await supabase
