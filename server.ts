@@ -61,39 +61,31 @@ async function startServer() {
   // LOGO & FAVICON - CRITICAL FOR WHATSAPP/SEO
   // ==========================================
   app.get("/logo.png", async (req, res) => {
-    console.log(`[LOGO] Request for logo.png from ${req.hostname}`);
     try {
-      const { data, error } = await supabase
+      const { data: orgs } = await supabase
         .from('organizations')
-        .select('branding, name')
-        .limit(1)
-        .single();
+        .select('branding, name, slug');
 
-      // Official fallback for Paty
-      const DEFAULT_LOGO = "https://puvjebetnwhubthfckau.supabase.co/storage/v1/object/public/logos/logo-paty.png";
+      const orgWithLogo = orgs?.find(o => o.branding?.logoUrl || o.branding?.logo || o.branding?.logo_url);
 
-      if (error || !data) {
-        console.warn("[LOGO] Using fallback logo");
-        return res.redirect(DEFAULT_LOGO);
+      if (orgWithLogo) {
+        const logoUrl = orgWithLogo.branding.logoUrl || orgWithLogo.branding.logo || orgWithLogo.branding.logo_url;
+        console.log(`[LOGO] Found logo in org: ${orgWithLogo.name}`);
+
+        if (logoUrl.startsWith('data:image')) {
+          const [meta, base64Data] = logoUrl.split(',');
+          const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
+          const img = Buffer.from(base64Data, 'base64');
+          res.writeHead(200, { 'Content-Type': mime, 'Content-Length': img.length, 'Cache-Control': 'public, max-age=86400' });
+          return res.end(img);
+        }
+        return res.redirect(logoUrl);
       }
 
-      const branding = data.branding || {};
-      const logoUrl = branding.logoUrl || branding.logo || branding.logo_url || DEFAULT_LOGO;
-
-      if (logoUrl.startsWith('data:image')) {
-        const [meta, base64Data] = logoUrl.split(',');
-        const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
-        const img = Buffer.from(base64Data, 'base64');
-
-        res.writeHead(200, {
-          'Content-Type': mime,
-          'Content-Length': img.length,
-          'Cache-Control': 'public, max-age=86400'
-        });
-        res.end(img);
-      } else {
-        res.redirect(logoUrl);
-      }
+      // Final stable fallback
+      const PUBLIC_FALLBACK = "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=500&auto=format&fit=crop&q=60";
+      console.warn("[LOGO] No logo found, using public fallback");
+      res.redirect(PUBLIC_FALLBACK);
     } catch (err: any) {
       console.error("[LOGO] Fatal error:", err.message);
       res.status(500).send('Internal Server Error');
