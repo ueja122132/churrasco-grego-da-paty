@@ -70,15 +70,26 @@ async function startServer() {
         .limit(1)
         .single();
 
-      if (error || !data || !data.branding?.logoUrl) {
-        console.error("[LOGO] Organization or logo not found in database");
-        return res.status(404).send('Logo not found');
+      if (error) {
+        console.error("[LOGO] Supabase error:", error.message);
+        return res.status(404).send(`Logo not found (DB Error: ${error.message})`);
       }
 
-      console.log(`[LOGO] Serving logo for ${data.name}`);
-      const logoUrl = data.branding.logoUrl;
+      if (!data) {
+        console.error("[LOGO] No organization found in database");
+        return res.status(404).send('Logo not found (No Org)');
+      }
+
+      console.log(`[LOGO] Found organization: ${data.name}`);
+      const logoUrl = data.branding?.logoUrl;
+
+      if (!logoUrl) {
+        console.error("[LOGO] No logoUrl in branding:", data.branding);
+        return res.status(404).send('Logo not found (No URL)');
+      }
 
       if (logoUrl.startsWith('data:image')) {
+        console.log("[LOGO] Serving Base64 image");
         const [meta, base64Data] = logoUrl.split(',');
         const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
         const img = Buffer.from(base64Data, 'base64');
@@ -90,10 +101,11 @@ async function startServer() {
         });
         res.end(img);
       } else {
+        console.log("[LOGO] Redirecting to:", logoUrl);
         res.redirect(logoUrl);
       }
-    } catch (err) {
-      console.error("[LOGO] Error serving logo:", err);
+    } catch (err: any) {
+      console.error("[LOGO] Fatal error:", err.message);
       res.status(500).send('Internal Server Error');
     }
   });
