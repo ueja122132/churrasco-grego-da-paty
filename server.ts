@@ -558,12 +558,16 @@ async function startServer() {
 
   // Update org logo (branding.logoUrl)
   app.patch("/api/organizations/:id/logo", async (req, res) => {
-    const { logoUrl } = req.body;
-    const { data: org } = await supabase.from('organizations').select('branding').eq('id', req.params.id).single();
-    const newBranding = { ...(org?.branding || {}), logoUrl };
-    const { data, error } = await supabase.from('organizations').update({ branding: newBranding }).eq('id', req.params.id).select().single();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true, org: data });
+    try {
+      const logoUrl = req.body.logoUrl || req.body.logo_url;
+      const { data: org } = await supabase.from('organizations').select('branding').eq('id', req.params.id).single();
+      const newBranding = { ...(org?.branding || {}), logoUrl };
+      const { data, error } = await supabase.from('organizations').update({ branding: newBranding }).eq('id', req.params.id).select().single();
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ success: true, org: data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Update operating hours
@@ -1336,33 +1340,6 @@ Diretrizes:
       .eq('settled', false);
 
     res.json({ success: true });
-  });
-
-  // Organization Settings Updates
-  app.patch("/api/organizations/:id/logo", async (req, res) => {
-    const { logo_url } = req.body;
-    const { data, error } = await supabase
-      .from('organizations')
-      .update({ branding: { logoUrl: logo_url } })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
-  });
-
-  app.patch("/api/organizations/:id/mp-token", async (req, res) => {
-    const { mp_access_token } = req.body;
-    const { data, error } = await supabase
-      .from('organizations')
-      .update({ mp_access_token: mp_access_token, has_mp_token: true })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
   });
 
   // Expense Management
