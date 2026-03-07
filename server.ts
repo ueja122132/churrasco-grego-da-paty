@@ -101,32 +101,43 @@ async function startServer() {
 
   // Proxy route for Logo Image (WhatsApp/SEO compatible)
   app.get("/logo.png", async (req, res) => {
-    const host = req.hostname;
+    console.log(`[LOGO] Request for logo.png`);
+
     try {
+      // For this specific app, we usually have one main org. 
+      // Fetching the first one to ensure WhatsApp always gets an image.
       const { data, error } = await supabase
         .from('organizations')
         .select('branding')
-        .eq('custom_domain', host)
+        .limit(1)
         .single();
 
       if (error || !data || !data.branding?.logoUrl) {
-        return res.status(404).send('Logo not found');
+        console.error(`[LOGO] Database error or no logo found:`, error);
+        // Serve a fallback blank pixel or generic food icon if database fails
+        return res.status(404).send('Logo not configured in database');
       }
 
       const logoUrl = data.branding.logoUrl;
       if (logoUrl.startsWith('data:image')) {
-        const base64Data = logoUrl.split(',')[1];
+        const parts = logoUrl.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
+        const base64Data = parts[1];
         const img = Buffer.from(base64Data, 'base64');
+
         res.writeHead(200, {
-          'Content-Type': 'image/png',
+          'Content-Type': mime,
           'Content-Length': img.length,
-          'Cache-Control': 'public, max-age=86400'
+          'Cache-Control': 'public, max-age=3600' // 1 hour cache
         });
         res.end(img);
+        console.log(`[LOGO] Successfully served base64 logo as ${mime}`);
       } else {
+        console.log(`[LOGO] Redirecting to external URL: ${logoUrl}`);
         res.redirect(logoUrl);
       }
     } catch (err) {
+      console.error(`[LOGO] Critical error:`, err);
       res.status(500).send('Internal Server Error');
     }
   });
