@@ -99,51 +99,6 @@ async function startServer() {
     }
   });
 
-  // Proxy route for Logo Image (WhatsApp/SEO compatible)
-  app.get("/logo.png", async (req, res) => {
-    console.log(`[LOGO] Request for logo.png`);
-
-    try {
-      // For this app, we assume a single-tenant setup or we serve the first org as fallback
-      const { data, error } = await supabase
-        .from('organizations')
-        .select('branding')
-        .limit(1)
-        .single();
-
-      if (error || !data || !data.branding?.logoUrl) {
-        console.error(`[LOGO] Database lookup failed:`, error);
-        return res.status(404).send('Logo configuration not found');
-      }
-
-      const logoUrl = data.branding.logoUrl;
-      console.log(`[LOGO] Found logo URL: ${logoUrl.substring(0, 50)}...`);
-
-      if (logoUrl.startsWith('data:image')) {
-        const parts = logoUrl.split(',');
-        const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/png';
-        const base64Data = parts[1];
-        const img = Buffer.from(base64Data, 'base64');
-
-        res.writeHead(200, {
-          'Content-Type': mime,
-          'Content-Length': img.length,
-          'Cache-Control': 'public, max-age=3600'
-        });
-        res.end(img);
-        console.log(`[LOGO] Served base64 logo successfully`);
-      } else {
-        res.redirect(logoUrl);
-      }
-    } catch (err) {
-      console.error(`[LOGO] Critical error:`, err);
-      res.status(500).send('Internal Server Error');
-    }
-  });
-
-  app.get("/favicon.ico", async (req, res) => {
-    res.redirect('/logo.png');
-  });
 
   app.get("/api/org/:slug", async (req, res) => {
     console.log(`[BACKEND] Request for org: ${req.params.slug}`);
