@@ -98,6 +98,41 @@ async function startServer() {
       res.status(500).json({ error: "Erro interno" });
     }
   });
+  // Proxy route for Logo Image (WhatsApp/SEO compatible)
+  app.get("/logo.png", async (req, res) => {
+    try {
+      // Get the first organization for this simple instance
+      const { data, error } = await supabase
+        .from('organizations')
+        .select('branding')
+        .limit(1)
+        .single();
+
+      if (error || !data || !data.branding?.logoUrl) {
+        return res.status(404).send('Logo not found');
+      }
+
+      const logoUrl = data.branding.logoUrl;
+      if (logoUrl.startsWith('data:image')) {
+        const base64Data = logoUrl.split(',')[1];
+        const img = Buffer.from(base64Data, 'base64');
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Content-Length': img.length,
+          'Cache-Control': 'public, max-age=86400'
+        });
+        res.end(img);
+      } else {
+        res.redirect(logoUrl);
+      }
+    } catch (err) {
+      res.status(500).send('Internal Server Error');
+    }
+  });
+
+  app.get("/favicon.ico", (req, res) => {
+    res.redirect('/logo.png');
+  });
 
 
   app.get("/api/org/:slug", async (req, res) => {
