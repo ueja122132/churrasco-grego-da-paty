@@ -2462,7 +2462,7 @@ const AdminPage = () => {
   const [newCourierPhone, setNewCourierPhone] = useState("");
   const [newCourierPassword, setNewCourierPassword] = useState("");
   const [newCourierCommission, setNewCourierCommission] = useState("0");
-  const [modalType, setModalType] = useState<'payout' | 'advance' | 'edit_commission' | null>(null);
+  const [modalType, setModalType] = useState<'payout' | 'advance' | 'edit_commission' | 'delete_courier' | null>(null);
   const [selectedCourier, setSelectedCourier] = useState<User | null>(null);
   const [editCommissionValue, setEditCommissionValue] = useState("0");
   const [advanceAmount, setAdvanceAmount] = useState("");
@@ -2621,7 +2621,6 @@ const AdminPage = () => {
   };
 
   const deleteCourier = async (id: string | number) => {
-    if (!confirm("Remover este entregador? Isso não apagará o histórico de pedidos dele.")) return;
     try {
       const res = await fetch(`/api/couriers/${id}`, { method: 'DELETE' });
       if (res.ok) {
@@ -3249,7 +3248,7 @@ const AdminPage = () => {
                         >
                           Pagar Entregador
                         </button>
-                        <button onClick={() => deleteCourier(c.id)} className="text-gray-300 hover:text-red-600 p-2 transition-colors"><Trash2 size={18} /></button>
+                        <button onClick={() => { setSelectedCourier(c); setModalType('delete_courier'); }} className="text-gray-300 hover:text-red-600 p-2 transition-colors"><Trash2 size={18} /></button>
                       </td>
                     </tr>
                   ))}
@@ -3386,7 +3385,7 @@ const AdminPage = () => {
             >
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-gray-800">
-                  {modalType === 'advance' ? 'Dar Vale' : modalType === 'payout' ? 'Pagar Entregador' : 'Editar Comissão'}
+                  {modalType === 'advance' ? 'Dar Vale' : modalType === 'payout' ? 'Pagar Entregador' : modalType === 'edit_commission' ? 'Editar Comissão' : 'Excluir Entregador'}
                 </h3>
                 <button onClick={() => setModalType(null)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
               </div>
@@ -3446,6 +3445,27 @@ const AdminPage = () => {
                     className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all font-bold"
                   >
                     Salvar Alteração
+                  </button>
+                </div>
+              ) : modalType === 'delete_courier' ? (
+                <div className="space-y-6">
+                  <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+                    <p className="text-[10px] font-black text-red-600 uppercase tracking-widest mb-1 text-center font-bold">Atenção</p>
+                    <p className="text-sm text-red-700 text-center font-bold">Deseja remover este entregador do sistema?</p>
+                  </div>
+                  <p className="text-sm text-gray-400 text-center px-4 leading-relaxed font-bold">
+                    Isso não apagará o histórico de pedidos dele, ele apenas perderá o acesso e sairá da fila.
+                  </p>
+                  <button
+                    onClick={async () => {
+                      if (selectedCourier) {
+                        await deleteCourier(selectedCourier.id);
+                        setModalType(null);
+                      }
+                    }}
+                    className="w-full py-4 bg-red-600 text-white rounded-2xl font-black shadow-xl shadow-red-100 hover:bg-red-700 transition-all font-bold"
+                  >
+                    Confirmar Exclusão
                   </button>
                 </div>
               ) : modalType === 'advance' ? (
