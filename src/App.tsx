@@ -2462,8 +2462,9 @@ const AdminPage = () => {
   const [newCourierPhone, setNewCourierPhone] = useState("");
   const [newCourierPassword, setNewCourierPassword] = useState("");
   const [newCourierCommission, setNewCourierCommission] = useState("0");
-  const [modalType, setModalType] = useState<'payout' | 'advance' | null>(null);
+  const [modalType, setModalType] = useState<'payout' | 'advance' | 'edit_commission' | null>(null);
   const [selectedCourier, setSelectedCourier] = useState<User | null>(null);
+  const [editCommissionValue, setEditCommissionValue] = useState("0");
   const [advanceAmount, setAdvanceAmount] = useState("");
   const [operatingHours, setOperatingHours] = useState<any>(null);
   const [hoursSaving, setHoursSaving] = useState(false);
@@ -3179,15 +3180,15 @@ const AdminPage = () => {
               <h2 className="text-xl font-bold">Novo Entregador</h2>
               <div>
                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
-                <input required value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                <input required autoComplete="new-password" value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
-                <input required value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
+                <input required autoComplete="new-password" value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
-                <input required type="password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                <input required type="password" autoComplete="new-password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
@@ -3208,23 +3209,10 @@ const AdminPage = () => {
                         <p className="text-[10px] text-gray-400 font-mono tracking-tighter">{c.phone}</p>
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-[10px] text-orange-600 font-bold tracking-tighter">Comissão: {c.commission_rate || 0}%</p>
-                          <button onClick={async () => {
-                            const val = prompt('Nova comissão (%):', String(c.commission_rate || 0));
-                            if (val !== null && !isNaN(parseFloat(val))) {
-                              try {
-                                const res = await fetch(`/api/couriers/${c.id}/commission`, {
-                                  method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ commission_rate: parseFloat(val) })
-                                });
-                                if (res.ok) {
-                                  setCouriers(couriers.map(courier => courier.id === c.id ? { ...courier, commission_rate: parseFloat(val) } : courier));
-                                  notify('Comissão atualizada com sucesso!', 'success');
-                                }
-                              } catch (e) {
-                                notify('Erro ao atualizar', 'error');
-                              }
-                            }
+                          <button onClick={() => {
+                            setSelectedCourier(c);
+                            setEditCommissionValue(String(c.commission_rate || 0));
+                            setModalType('edit_commission');
                           }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
                         </div>
                       </td>
@@ -3398,7 +3386,7 @@ const AdminPage = () => {
             >
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-gray-800">
-                  {modalType === 'advance' ? 'Dar Vale' : 'Pagar Entregador'}
+                  {modalType === 'advance' ? 'Dar Vale' : modalType === 'payout' ? 'Pagar Entregador' : 'Editar Comissão'}
                 </h3>
                 <button onClick={() => setModalType(null)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
               </div>
@@ -3416,7 +3404,51 @@ const AdminPage = () => {
                 </div>
               </div>
 
-              {modalType === 'advance' ? (
+              {modalType === 'edit_commission' ? (
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 font-bold">Nova Comissão (%)</label>
+                    <input
+                      autoFocus
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      max="100"
+                      value={editCommissionValue}
+                      onChange={e => setEditCommissionValue(e.target.value)}
+                      className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 transition-all text-xl font-black text-gray-800"
+                      placeholder="Ex: 15"
+                    />
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!selectedCourier) return;
+                      const val = parseFloat(editCommissionValue);
+                      if (isNaN(val)) return;
+                      try {
+                        const res = await fetch(`/api/couriers/${selectedCourier.id}/commission`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ commission_rate: val })
+                        });
+                        if (res.ok) {
+                          setCouriers(couriers.map(c => c.id === selectedCourier.id ? { ...c, commission_rate: val } : c));
+                          notify('Comissão atualizada com sucesso!', 'success');
+                          setModalType(null);
+                        } else {
+                          const errData = await res.json().catch(() => ({}));
+                          notify(`Erro: ${errData.error || res.statusText}`, 'error');
+                        }
+                      } catch (e) {
+                        notify('Erro na conexão ao atualizar', 'error');
+                      }
+                    }}
+                    className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all font-bold"
+                  >
+                    Salvar Alteração
+                  </button>
+                </div>
+              ) : modalType === 'advance' ? (
                 <div className="space-y-6">
                   <div>
                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 font-bold">Valor do Adiantamento</label>
