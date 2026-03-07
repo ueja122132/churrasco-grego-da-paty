@@ -584,6 +584,18 @@ export default function App() {
   const logout = async () => {
     setUser(null);
     localStorage.removeItem("user");
+
+    // Remove all store carts to ensure privacy across profile switches
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('cart_')) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
+
+    window.dispatchEvent(new Event('user-logout'));
     await supabase.auth.signOut();
   };
 
@@ -632,14 +644,26 @@ const SalesPage = () => {
   const navigate = useNavigate();
   const { notify } = useNotification();
   const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<OrderItem[]>(() => {
-    const saved = localStorage.getItem('cart');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const cartKey = org?.id ? `cart_${org.id}_${user?.id || 'guest'}` : null;
+
+  const [cart, setCart] = useState<OrderItem[]>([]);
 
   useEffect(() => {
-    localStorage.setItem('cart', JSON.stringify(cart));
-  }, [cart]);
+    if (cartKey) {
+      const saved = localStorage.getItem(cartKey);
+      setCart(saved ? JSON.parse(saved) : []);
+    } else {
+      setCart([]);
+    }
+  }, [cartKey]);
+
+  useEffect(() => {
+    if (cartKey) {
+      localStorage.setItem(cartKey, JSON.stringify(cart));
+    }
+  }, [cart, cartKey]);
+
+
 
   const [isOrdering, setIsOrdering] = useState(false);
   const [needsLogin, setNeedsLogin] = useState(false);

@@ -993,14 +993,31 @@ async function startServer() {
 
   app.get("/api/my-orders/:userId", async (req, res) => {
     const { data: orders } = await supabase.from('orders').select('*').eq('user_id', req.params.userId).order('created_at', { ascending: false });
-    const { data: activeOrders } = await supabase.from('orders').select('id, created_at').in('status', ['pending', 'preparing']).order('created_at', { ascending: true });
+
+    // Get active orders for EACH org involved to calculate correct queue positions
+    const orgIds = [...new Set((orders || []).filter(o => o.status === 'pending' || o.status === 'preparing').map(o => o.org_id))];
+
+    const activeOrdersMap: Record<string, any[]> = {};
+    if (orgIds.length > 0) {
+      const { data: allActive } = await supabase.from('orders')
+        .select('id, created_at, org_id')
+        .in('status', ['pending', 'preparing'])
+        .in('org_id', orgIds)
+        .order('created_at', { ascending: true });
+
+      (allActive || []).forEach(ao => {
+        if (!activeOrdersMap[ao.org_id]) activeOrdersMap[ao.org_id] = [];
+        activeOrdersMap[ao.org_id].push(ao);
+      });
+    }
 
     const enrichedOrders = (orders || []).map(o => {
       let queuePosition = 0;
       let estimatedMinutes = 0;
 
       if (o.status === 'pending' || o.status === 'preparing') {
-        const index = (activeOrders || []).findIndex(ao => ao.id === o.id);
+        const orgActive = activeOrdersMap[o.org_id] || [];
+        const index = orgActive.findIndex(ao => ao.id === o.id);
         if (index !== -1) {
           queuePosition = index;
           estimatedMinutes = (index + 1) * 10;
@@ -1172,7 +1189,13 @@ async function startServer() {
       }
     }
 
-    await supabase.from('orders').update({ status }).eq('id', orderId);
+    const { error: updateError } = await supabase.from('orders').update({ status }).eq('id', orderId);
+
+    if (updateError) {
+      console.error("[Server] Error updating order status:", updateError);
+      return res.status(500).json({ error: "Erro ao atualizar status no banco de dados." });
+    }
+
     io.emit("order:update", { id: parseInt(orderId), status });
     res.json({ success: true });
   });
