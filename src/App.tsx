@@ -293,13 +293,9 @@ const Navbar = () => {
         <motion.div
           animate={{ rotate: isConnected ? 360 : 0 }}
           transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-          className="w-12 h-12 rounded-xl overflow-hidden flex items-center justify-center bg-white shadow-sm border border-gray-100"
+          className="w-12 h-12 rounded-xl flex items-center justify-center bg-white shadow-sm border border-gray-100"
         >
-          {org?.branding?.logoUrl ? (
-            <img src={org.branding.logoUrl} alt={org.name} className="w-full h-full object-contain" />
-          ) : (
-            <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
-          )}
+          <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
         </motion.div>
         <div
           className={cn(
