@@ -100,30 +100,34 @@ async function startServer() {
   app.get("/api/org/detect", async (req, res) => {
     const host = req.query.host as string || req.hostname;
     const fallbackSlug = req.query.slug as string;
+    const orgId = req.query.orgId as string;
 
     console.log(`[BACKEND] Detecting org for host: ${host}, fallback: ${fallbackSlug}`);
 
     try {
-      // 1. Try by custom domain
-      let { data, error } = await supabase
-        .from('organizations')
-        .select('*')
-        .eq('custom_domain', host)
-        .single();
+      let data = null;
+      let error = null;
 
-      // 2. If not found and host contains a subdomain of your main apps (optional logic)
-      // For now, if not found by domain, try the fallback slug
-      if (error && fallbackSlug) {
-        const { data: slugData, error: slugError } = await supabase
-          .from('organizations')
-          .select('*')
-          .eq('slug', fallbackSlug)
-          .single();
+      // 1. Try by explicit orgId (from logged in user)
+      if (orgId) {
+        const { data: idData } = await supabase.from('organizations').select('*').eq('id', orgId).single();
+        if (idData) data = idData;
+      }
+
+      // 2. Try by custom domain
+      if (!data && host) {
+        const { data: domData } = await supabase.from('organizations').select('*').eq('custom_domain', host).single();
+        if (domData) data = domData;
+      }
+
+      // 3. Try by slug
+      if (!data && fallbackSlug) {
+        const { data: slugData, error: slugError } = await supabase.from('organizations').select('*').eq('slug', fallbackSlug).single();
         data = slugData;
         error = slugError;
       }
 
-      if (error || !data) {
+      if (!data) {
         return res.status(404).json({ error: "Organização não encontrada" });
       }
 
@@ -915,7 +919,8 @@ async function startServer() {
   });
 
   app.get("/api/users/:id", async (req, res) => {
-    const { data, error } = await supabase.from('profiles').select('id, name, phone, points, address, latitude, longitude').eq('id', req.params.id).single();
+    // Include org_id and role to prevent session corruption in the frontend
+    const { data, error } = await supabase.from('profiles').select('id, name, phone, points, address, latitude, longitude, org_id, role').eq('id', req.params.id).single();
     if (data) {
       res.json(data);
     } else {
@@ -925,7 +930,8 @@ async function startServer() {
 
   app.patch("/api/users/:id", async (req, res) => {
     const { address, latitude, longitude } = req.body;
-    const { data, error } = await supabase.from('profiles').update({ address, latitude, longitude }).eq('id', req.params.id).select().single();
+    // Explicitly select all to ensure org_id and role are returned
+    const { data, error } = await supabase.from('profiles').update({ address, latitude, longitude }).eq('id', req.params.id).select('id, name, phone, points, address, latitude, longitude, org_id, role').single();
     if (error) return res.status(500).json({ error: "Erro ao atualizar perfil" });
     res.json(data);
   });

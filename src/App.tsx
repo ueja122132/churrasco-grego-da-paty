@@ -276,15 +276,15 @@ const Navbar = () => {
 
   const location = useLocation();
   const navItems = [
-    { path: "/", icon: ShoppingBag, label: "Vendas", roles: ['user', 'admin', 'super_admin'] },
-    { path: "/kitchen", icon: ChefHat, label: "Cozinha", roles: ['admin', 'super_admin'] },
-    { path: "/delivery", icon: Truck, label: "Entrega", roles: ['admin', 'super_admin'] },
-    { path: "/courier-dashboard", icon: ClipboardList, label: "Minhas Entregas", roles: ['courier'] },
-    { path: "/admin", icon: Settings, label: "Admin", roles: ['admin', 'super_admin'] },
-    { path: "/finance", icon: DollarSign, label: "Caixa", roles: ['admin', 'super_admin'] },
+    { path: org ? `/${org.slug}` : "/", icon: ShoppingBag, label: "Vendas", roles: ['user', 'admin', 'super_admin'] },
+    { path: org ? `/${org.slug}/kitchen` : "/kitchen", icon: ChefHat, label: "Cozinha", roles: ['admin', 'super_admin'] },
+    { path: org ? `/${org.slug}/delivery` : "/delivery", icon: Truck, label: "Entrega", roles: ['admin', 'super_admin'] },
+    { path: org ? `/${org.slug}/courier-dashboard` : "/courier-dashboard", icon: ClipboardList, label: "Minhas Entregas", roles: ['courier'] },
+    { path: org ? `/${org.slug}/admin` : "/admin", icon: Settings, label: "Admin", roles: ['admin', 'super_admin'] },
+    { path: org ? `/${org.slug}/finance` : "/finance", icon: DollarSign, label: "Caixa", roles: ['admin', 'super_admin'] },
     { path: "/saas-admin", icon: Activity, label: "SaaS", roles: ['super_admin'] },
     { path: "/super-admin", icon: Lock, label: "Super", roles: ['super_admin'] },
-    { path: "/profile", icon: User, label: "Perfil", roles: ['user', 'admin', 'super_admin', 'courier'] },
+    { path: org ? `/${org.slug}/profile` : "/profile", icon: User, label: "Perfil", roles: ['user', 'admin', 'super_admin', 'courier'] },
   ].filter(item => item.roles.includes(user?.role || 'user'));
 
   return (
@@ -295,7 +295,11 @@ const Navbar = () => {
           transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
           className="w-12 h-12 rounded-xl flex items-center justify-center bg-white shadow-sm border border-gray-100"
         >
-          <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
+          {org?.branding?.logoUrl ? (
+            <img src={org.branding.logoUrl} alt={org.name} className="w-10 h-10 object-contain" />
+          ) : (
+            <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
+          )}
         </motion.div>
         <div
           className={cn(
@@ -530,14 +534,21 @@ const AppInner = () => {
       )}>
         <Routes>
           <Route path="/" element={<SalesPage />} />
-          <Route path="/kitchen" element={<KitchenPage />} />
-          <Route path="/delivery" element={<DeliveryPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="/finance" element={<FinancePage />} />
+          <Route path="/:slug" element={<SalesPage />} />
+          <Route path="/kitchen" element={org ? <Navigate to={`/${org.slug}/kitchen`} replace /> : <KitchenPage />} />
+          <Route path="/:slug/kitchen" element={<KitchenPage />} />
+          <Route path="/delivery" element={org ? <Navigate to={`/${org.slug}/delivery`} replace /> : <DeliveryPage />} />
+          <Route path="/:slug/delivery" element={<DeliveryPage />} />
+          <Route path="/admin" element={org ? <Navigate to={`/${org.slug}/admin`} replace /> : <AdminPage />} />
+          <Route path="/:slug/admin" element={<AdminPage />} />
+          <Route path="/finance" element={org ? <Navigate to={`/${org.slug}/finance`} replace /> : <FinancePage />} />
+          <Route path="/:slug/finance" element={<FinancePage />} />
           <Route path="/saas-admin" element={<SaaSAdminPage />} />
           <Route path="/super-admin" element={<SuperAdminPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/courier-dashboard" element={<CourierDashboard />} />
+          <Route path="/profile" element={org ? <Navigate to={`/${org.slug}/profile`} replace /> : <ProfilePage />} />
+          <Route path="/:slug/profile" element={<ProfilePage />} />
+          <Route path="/courier-dashboard" element={org ? <Navigate to={`/${org.slug}/courier-dashboard`} replace /> : <CourierDashboard />} />
+          <Route path="/:slug/courier-dashboard" element={<CourierDashboard />} />
           <Route path="/courier" element={<Navigate to="/courier-dashboard" replace />} />
           <Route path="/venda" element={<SaaSLandingPage />} />
           <Route path="/venda/cadastro" element={<SaaSStoreRegister />} />
@@ -552,32 +563,114 @@ const AppInner = () => {
   );
 };
 
+const TenantProvider = ({ children }: { children: React.ReactNode }) => {
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [loading, setLoading] = useState(true);
+  const location = useLocation();
+  const { user } = useAuth();
+
+  useEffect(() => {
+    const host = window.location.hostname;
+    const pathname = location.pathname;
+    const pathParts = pathname.split('/').filter(Boolean);
+
+    // Reserved keywords that should not be treated as slugs
+    const reservedKeywords = [
+      'admin', 'venda', 'login', 'register', 'assinar', 'rastreio',
+      'kitchen', 'delivery', 'finance', 'saas-admin', 'super-admin',
+      'profile', 'courier-dashboard', 'courier'
+    ];
+
+    let slug: string | null = null;
+    let orgId: string | null = null;
+
+    // 1. Path slug (explicitly changing store)
+    if (pathParts.length > 0 && !reservedKeywords.includes(pathParts[0])) {
+      slug = pathParts[0];
+    }
+    // 2. Logged in user (stays in their assigned org even on /admin or /)
+    else if (user?.org_id) {
+      orgId = user.org_id;
+    }
+
+    // Se o usuário está logado mas o org_id ainda não chegou (sincronização em curso),
+    // NUNCA mostramos a Paty. Aguardamos a sincronização forçada aqui se necessário.
+    const runDetection = async (finalOrgId: string | null, finalSlug: string | null) => {
+      console.log(`[TENANT] Detecting org. Host: ${host}, slug: ${finalSlug}, orgId: ${finalOrgId}`);
+      setLoading(true);
+      try {
+        const query = finalOrgId ? `orgId=${finalOrgId}` : `slug=${finalSlug || ''}`;
+        const res = await fetch(`/api/org/detect?host=${host}&${query}`);
+        if (!res.ok) throw new Error("Org not found");
+        const data = await res.json();
+        if (data && data.id) {
+          setOrg(data);
+        }
+      } catch (err) {
+        console.warn("Could not load organization:", err);
+        // Só faz o fallback final se realmente não houver usuário ou slug
+        if (!user && !finalSlug && !org) {
+          const r = await fetch(`/api/org/detect?slug=paty-churrasco`);
+          const fallbackData = await r.json();
+          setOrg(fallbackData);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (user && !user.org_id && !slug && !orgId) {
+      console.log("[TENANT] User logado sem org_id. Buscando perfil completo...");
+      setLoading(true);
+      fetch(`/api/users/${user.id}`)
+        .then(res => res.json())
+        .then(freshUser => {
+          if (freshUser.org_id) {
+            console.log("[TENANT] Perfil sincronizado! org_id:", freshUser.org_id);
+            // O useEffect vai rodar de novo por causa do user.org_id mudar no login(...)
+            // Mas vamos disparar a detecção agora mesmo para ser mais rápido
+            runDetection(freshUser.org_id, null);
+          } else {
+            // Realmente não tem org, fallback normal
+            runDetection(null, "paty-churrasco");
+          }
+        })
+        .catch(() => runDetection(null, "paty-churrasco"));
+      return;
+    }
+
+    // 3. Fallback for root access (unauthenticated)
+    if (!user && !slug && (pathParts.length === 0 || reservedKeywords.includes(pathParts[0]))) {
+      slug = "paty-churrasco";
+    }
+
+    runDetection(orgId, slug);
+  }, [location.pathname, user?.org_id, !!user]);
+
+  useEffect(() => {
+    if (org) {
+      document.title = `${org.name} - O Melhor Sabor da Região!`;
+
+      // Update theme color meta tag
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      if (themeColor) {
+        themeColor.setAttribute('content', org.branding.primaryColor || '#ea580c');
+      }
+    }
+  }, [org]);
+
+  return (
+    <TenantContext.Provider value={{ org, loading }}>
+      {children}
+    </TenantContext.Provider>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem("user");
     return saved ? JSON.parse(saved) : null;
   });
-
-  const [org, setOrg] = useState<Organization | null>(null);
-  const [loadingOrg, setLoadingOrg] = useState(true);
-
-  useEffect(() => {
-    const host = window.location.hostname;
-    const fallbackSlug = "paty-churrasco";
-
-    fetch(`/api/org/detect?host=${host}&slug=${fallbackSlug}`)
-      .then(res => {
-        if (!res.ok) throw new Error("Org not found");
-        return res.json();
-      })
-      .then(setOrg)
-      .catch(err => {
-        console.warn("Could not load organization:", err);
-        setOrg(null);
-      })
-      .finally(() => setLoadingOrg(false));
-  }, []);
-
   const login = (userData: User) => {
     setUser(userData);
     localStorage.setItem("user", JSON.stringify(userData));
@@ -625,15 +718,37 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Sincronização obrigatória de perfil para evitar dados obsoletos no localStorage
+  useEffect(() => {
+    if (user?.id) {
+      const syncProfile = async () => {
+        try {
+          const res = await fetch(`/api/users/${user.id}`);
+          if (res.ok) {
+            const freshData = await res.json();
+            // Só atualiza se houver mudança relevante para evitar loops
+            if (freshData.org_id !== user.org_id || freshData.role !== user.role) {
+              console.log("[AUTH] Syncing fresh profile data...", freshData.org_id);
+              login({ ...user, ...freshData });
+            }
+          }
+        } catch (err) {
+          console.error("[AUTH] Profile sync failed:", err);
+        }
+      };
+      syncProfile();
+    }
+  }, [user?.id]); // Executa no mount e se o ID mudar
+
   return (
     <NotificationProvider>
-      <TenantContext.Provider value={{ org, loading: loadingOrg }}>
-        <AuthContext.Provider value={{ user, login, logout }}>
-          <Router>
+      <AuthContext.Provider value={{ user, login, logout }}>
+        <Router>
+          <TenantProvider>
             <AppInner />
-          </Router>
-        </AuthContext.Provider>
-      </TenantContext.Provider>
+          </TenantProvider>
+        </Router>
+      </AuthContext.Provider>
     </NotificationProvider>
   );
 }
@@ -2876,9 +2991,9 @@ const AdminPage = () => {
       <header className="mb-8">
         <h1 className="text-4xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
           <Settings size={36} className="text-gray-700" />
-          Administração
+          Administração - {org?.name || "Carregando..."}
         </h1>
-        <p className="text-gray-500 mt-2">Gerencie seu cardápio, entregadores e loja</p>
+        <p className="text-gray-500 mt-2">Gerencie o cardápio e configurações da loja {org?.name}</p>
       </header>
 
       <div className="flex gap-4 mb-8 overflow-x-auto pb-2">
@@ -4026,14 +4141,19 @@ const LoginPage = () => {
       if (res.ok) {
         login(data);
         // Redirecionamento baseado no cargo
+        // Redirecionamento baseado no cargo com slug da organização
+        const targetOrgSlug = data.org_slug || (data.organization?.slug);
+        // Note: checking if backend returns slug. If not, the Navigate in Route will handle it, 
+        // but let's try to be precise if the data is available.
+
         if (data.role === 'courier') {
-          navigate("/courier-dashboard");
+          navigate(data.org_slug ? `/${data.org_slug}/courier-dashboard` : "/courier-dashboard");
         } else if (data.role === 'admin') {
-          navigate("/admin");
+          navigate(data.org_slug ? `/${data.org_slug}/admin` : "/admin");
         } else if (data.role === 'super_admin') {
           navigate("/super-admin");
         } else {
-          navigate("/");
+          navigate(data.org_slug ? `/${data.org_slug}` : "/");
         }
       } else {
         setError(data.error);
@@ -4751,8 +4871,11 @@ const SaaSStoreRegister = () => {
 
       if (res.ok) {
         // Successful registration
-        notify(`Loja ${data.org.name} criada com sucesso! Redirecionando para login...`, "success");
-        setTimeout(() => navigate("/login"), 2000);
+        notify(`Loja ${data.org.name} criada com sucesso! Redirecionando...`, "success");
+        setTimeout(() => {
+          // Redirect to their specific store URL
+          window.location.href = `/${data.org.slug}`;
+        }, 2000);
       } else {
         setError(data.error);
       }
