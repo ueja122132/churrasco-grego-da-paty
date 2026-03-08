@@ -4401,6 +4401,39 @@ const RegisterPage = () => {
 const SaaSLandingPage = () => {
   const navigate = useNavigate();
 
+  const features = [
+    {
+      icon: Store,
+      title: "Multitenant Nativo",
+      desc: "Gerencie múltiplas unidades ou franquias a partir de um único painel centralizado."
+    },
+    {
+      icon: Map,
+      title: "Rastreio em Tempo Real",
+      desc: "Seus clientes acompanham o entregador no mapa, reduzindo a ansiedade e chamados no suporte."
+    },
+    {
+      icon: BarChart3,
+      title: "Dashboards Avançados",
+      desc: "Métricas de vendas, produtos mais pedidos e desempenho de entregadores em tempo real."
+    },
+    {
+      icon: Wallet,
+      title: "Pix Automatizado",
+      desc: "Receba e confirme pagamentos instantaneamente com integração nativa sem taxas abusivas."
+    },
+    {
+      icon: Users,
+      title: "Fidelidade & Pontos",
+      desc: "Sistema de gamificação para reter clientes e aumentar o faturamento recorrente."
+    },
+    {
+      icon: Lock,
+      title: "Segurança Enterprise",
+      desc: "Seus dados protegidos com criptografia de ponta e isolamento total entre lojas."
+    }
+  ];
+
   const plans = [
     {
       name: "Bronze",
@@ -4426,102 +4459,263 @@ const SaaSLandingPage = () => {
     }
   ];
 
+  const faqs = [
+    { q: "Como funciona a ativação?", a: "Após o cadastro e escolha do plano, sua loja é ativada instantaneamente com um subdomínio próprio." },
+    { q: "Posso usar meu próprio domínio?", a: "Sim! No plano Prata e Ouro você pode configurar seu domínio .com ou .com.br." },
+    { q: "Tem taxa sobre as vendas?", a: "Não. Cobramos apenas a mensalidade fixa do seu plano. O faturamento é 100% seu." }
+  ];
+
   return (
-    <div className="min-h-screen bg-slate-50 overflow-x-hidden">
-      {/* Hero Section */}
-      <section className="relative pt-20 pb-32 flex flex-col items-center text-center px-6 overflow-hidden">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[1000px] bg-orange-100/50 rounded-full blur-3xl -z-10 -translate-y-1/2" />
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-4xl"
-        >
-          <span className="bg-orange-100 text-orange-600 px-4 py-1.5 rounded-full text-sm font-black uppercase tracking-widest mb-6 inline-block">
-            A Revolução do Churrasco Grego 🍢
-          </span>
-          <h1 className="text-5xl md:text-7xl font-black text-slate-900 leading-tight mb-8">
-            Escale seu negócio com o <span className="text-gradient">AP Delivery</span>
-          </h1>
-          <p className="text-xl text-slate-500 mb-12 max-w-2xl mx-auto leading-relaxed">
-            Gestão completa, multitenant, painel de entregas e fidelidade. Tudo o que você precisa para transformar sua loja em uma rede de sucesso.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button
-              onClick={() => navigate("/venda/cadastro")}
-              className="bg-orange-600 text-white px-10 py-5 rounded-3xl font-black uppercase tracking-widest shadow-xl shadow-orange-200 hover:scale-105 transition-all text-lg"
-            >
-              Começar Agora
-            </button>
-            <button className="bg-white text-slate-900 border border-slate-200 px-10 py-5 rounded-3xl font-black uppercase tracking-widest hover:bg-slate-50 transition-all text-lg shadow-sm">
-              Ver Demonstração
-            </button>
+    <div className="min-h-screen bg-[#FDFDFD] overflow-x-hidden selection:bg-orange-100 selection:text-orange-600">
+      {/* Premium Navbar for Landing */}
+      <nav className="fixed top-0 left-0 right-0 z-[100] px-6 py-4 flex justify-between items-center glass-morphism border-b border-gray-100/50">
+        <div className="flex items-center gap-2">
+          <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-orange-200">
+            <UtensilsCrossed size={24} />
           </div>
-        </motion.div>
-      </section>
-
-      {/* Plans Section */}
-      <section className="py-24 px-6 max-w-7xl mx-auto">
-        <div className="text-center mb-16">
-          <h2 className="text-4xl font-black text-slate-900 uppercase tracking-tighter italic">Planos que cabem no seu bolso</h2>
-          <p className="text-slate-500 mt-4">Escolha o ideal para o tamanho da sua ambição</p>
+          <span className="text-2xl font-black tracking-tighter text-slate-900 italic uppercase">AP <span className="text-orange-600">Volt</span></span>
         </div>
+        <div className="hidden md:flex items-center gap-8 font-bold text-slate-600 text-sm uppercase tracking-widest">
+          <a href="#features" className="hover:text-orange-600 transition-colors">Recursos</a>
+          <a href="#precos" className="hover:text-orange-600 transition-colors">Preços</a>
+          <a href="#faq" className="hover:text-orange-600 transition-colors">Dúvidas</a>
+        </div>
+        <button
+          onClick={() => navigate("/login")}
+          className="bg-slate-900 text-white px-6 py-2.5 rounded-2xl font-bold uppercase text-xs tracking-widest hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
+        >
+          Entrar
+        </button>
+      </nav>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {plans.map((plan) => (
-            <motion.div
-              key={plan.name}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              transition={{ delay: plan.delay }}
-              viewport={{ once: true }}
-              className={cn(
-                "premium-card p-10 flex flex-col relative overflow-hidden",
-                plan.popular ? "ring-4 ring-orange-500/20 scale-105" : ""
-              )}
-            >
-              {plan.popular && (
-                <div className="absolute top-4 right-0 bg-orange-500 text-white px-4 py-1 text-[10px] font-black uppercase tracking-widest -rotate-0 rounded-l-lg">
-                  Mais Popular
-                </div>
-              )}
-              <h3 className="text-2xl font-black text-slate-800 mb-2">{plan.name}</h3>
-              <div className="flex items-baseline gap-1 mb-6">
-                <span className="text-4xl font-black text-slate-900">{plan.price}</span>
-                <span className="text-slate-400 font-bold">/mês</span>
-              </div>
-              <ul className="space-y-4 mb-10 flex-1">
-                {plan.features.map(f => (
-                  <li key={f} className="flex items-center gap-3 text-slate-600 font-medium">
-                    <CheckCircle2 size={20} className="text-emerald-500 shrink-0" />
-                    {f}
-                  </li>
-                ))}
-              </ul>
+      {/* Hero Section */}
+      <section className="relative pt-32 pb-20 md:pt-48 md:pb-32 px-6">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          <motion.div
+            initial={{ opacity: 0, x: -30 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.8 }}
+          >
+            <span className="inline-flex items-center gap-2 bg-orange-50 text-orange-600 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-8 border border-orange-100">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+              </span>
+              SaaS de Gestão de Food Delivery
+            </span>
+            <h1 className="text-6xl md:text-8xl font-black text-slate-900 leading-[0.9] mb-8 tracking-tighter uppercase italic">
+              O futuro do seu <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-600 to-indigo-600">Delivery</span> está aqui.
+            </h1>
+            <p className="text-lg md:text-xl text-slate-500 mb-12 max-w-xl leading-relaxed font-medium">
+              Transforme sua operação em uma máquina de vendas com multitenancy real, rastreio em tempo real e automação completa de pedidos.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-4">
               <button
                 onClick={() => navigate("/venda/cadastro")}
-                className={cn(
-                  "w-full py-4 rounded-2xl font-black uppercase tracking-widest transition-all",
-                  plan.popular ? "bg-orange-600 text-white shadow-lg shadow-orange-200 hover:bg-orange-700" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                )}
+                className="bg-orange-600 text-white px-10 py-5 rounded-[2rem] font-black uppercase tracking-widest shadow-2xl shadow-orange-200 hover:scale-105 active:scale-95 transition-all text-sm flex items-center justify-center gap-3 group"
               >
-                Assinar Plano
+                Criar Minha Loja
+                <ArrowRight size={20} className="group-hover:translate-x-1 transition-transform" />
               </button>
+              <button className="bg-white text-slate-900 border border-slate-200 px-10 py-5 rounded-[2rem] font-black uppercase tracking-widest hover:bg-slate-50 transition-all text-sm shadow-sm flex items-center justify-center gap-3">
+                Ver Vídeo Demo
+                <Activity size={18} className="text-orange-500" />
+              </button>
+            </div>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9, rotate: 2 }}
+            animate={{ opacity: 1, scale: 1, rotate: 0 }}
+            transition={{ duration: 1, ease: "easeOut" }}
+            className="relative"
+          >
+            <div className="absolute inset-0 bg-gradient-to-tr from-orange-200/40 to-indigo-200/40 blur-[100px] -z-10 rounded-full" />
+            <div className="premium-card p-2 rounded-[3rem] overflow-hidden shadow-3xl bg-white/40 backdrop-blur-sm border border-white/50">
+              <img
+                src="https://churrascogregodapaty.com/brain/7be1ba11-60a3-4ca8-97de-7070e90baa26/saas_hero_mockup_1772929768933.png"
+                alt="Interface do Sistema"
+                className="w-full rounded-[2.5rem] shadow-2xl object-cover"
+              />
+            </div>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* Stats Section */}
+      <section className="py-12 px-6">
+        <div className="max-w-7xl mx-auto bg-slate-900 rounded-[3rem] p-12 md:p-20 grid grid-cols-2 md:grid-cols-4 gap-12 text-center text-white relative overflow-hidden shadow-2xl">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-orange-600/20 blur-[100px] -z-10" />
+          <div>
+            <p className="text-4xl md:text-5xl font-black mb-2 text-gradient">200+</p>
+            <p className="text-xs uppercase font-black tracking-widest text-slate-400">Lojas Ativas</p>
+          </div>
+          <div>
+            <p className="text-4xl md:text-5xl font-black mb-2 text-gradient">1.2M</p>
+            <p className="text-xs uppercase font-black tracking-widest text-slate-400">Pedidos Processados</p>
+          </div>
+          <div>
+            <p className="text-4xl md:text-5xl font-black mb-2 text-gradient">98%</p>
+            <p className="text-xs uppercase font-black tracking-widest text-slate-400">Satisfação</p>
+          </div>
+          <div>
+            <p className="text-4xl md:text-5xl font-black mb-2 text-gradient">24/7</p>
+            <p className="text-xs uppercase font-black tracking-widest text-slate-400">Suporte Premium</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Section */}
+      <section id="features" className="py-32 px-6 max-w-7xl mx-auto">
+        <div className="flex flex-col md:flex-row justify-between items-end mb-20 gap-8">
+          <div className="max-w-2xl">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-orange-600 mb-4 italic">Recursos de Elite</h2>
+            <h3 className="text-5xl md:text-6xl font-black text-slate-900 uppercase tracking-tighter leading-none italic">
+              Tudo o que você precisa <br /> para escalar.
+            </h3>
+          </div>
+          <p className="text-slate-500 font-medium max-w-sm">
+            Nossa plataforma foi construída para aguentar grandes volumes de pedidos com estabilidade e velocidade.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {features.map((f, i) => (
+            <motion.div
+              key={i}
+              whileHover={{ y: -10 }}
+              className="premium-card p-10 group hover:border-orange-500/20 transition-all duration-500"
+            >
+              <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-800 mb-8 group-hover:bg-orange-600 group-hover:text-white transition-all duration-500 shadow-sm">
+                <f.icon size={32} />
+              </div>
+              <h4 className="text-xl font-black text-slate-900 mb-4 uppercase italic tracking-tighter">{f.title}</h4>
+              <p className="text-slate-500 leading-relaxed font-medium">{f.desc}</p>
             </motion.div>
           ))}
         </div>
       </section>
 
+      {/* Plans Section */}
+      <section id="precos" className="py-32 px-6 bg-slate-50 relative overflow-hidden">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-24">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-orange-600 mb-4 italic">Investimento</h2>
+            <h3 className="text-5xl md:text-7xl font-black text-slate-900 uppercase tracking-tighter italic">Planos Sob Medida</h3>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {plans.map((plan) => (
+              <motion.div
+                key={plan.name}
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                transition={{ delay: plan.delay }}
+                viewport={{ once: true }}
+                className={cn(
+                  "p-12 rounded-[3.5rem] flex flex-col relative overflow-hidden transition-all duration-500",
+                  plan.popular
+                    ? "bg-slate-900 text-white shadow-3xl scale-110 z-10"
+                    : "bg-white text-slate-900 border border-slate-100 shadow-xl"
+                )}
+              >
+                {plan.popular && (
+                  <div className="absolute top-8 right-8 bg-orange-600 text-white px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">
+                    RECOMENDADO
+                  </div>
+                )}
+                <h3 className="text-2xl font-black mb-2 uppercase italic tracking-tighter">{plan.name}</h3>
+                <div className="flex items-baseline gap-1 mb-10">
+                  <span className="text-5xl font-black">{plan.price}</span>
+                  <span className={cn("text-sm font-bold", plan.popular ? "text-slate-400" : "text-slate-400")}>/mês</span>
+                </div>
+                <ul className="space-y-5 mb-12 flex-1">
+                  {plan.features.map(f => (
+                    <li key={f} className="flex items-center gap-4 text-sm font-bold tracking-tight">
+                      <div className={cn("w-5 h-5 rounded-full flex items-center justify-center", plan.popular ? "bg-orange-600" : "bg-orange-100")}>
+                        <CheckCircle2 size={12} className={plan.popular ? "text-white" : "text-orange-600"} />
+                      </div>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  onClick={() => navigate("/venda/cadastro")}
+                  className={cn(
+                    "w-full py-5 rounded-[2rem] font-black uppercase tracking-widest transition-all text-xs",
+                    plan.popular
+                      ? "bg-orange-600 hover:bg-orange-700 shadow-xl shadow-orange-900/40"
+                      : "bg-slate-900 text-white hover:bg-black shadow-xl shadow-slate-200"
+                  )}
+                >
+                  Assinar Agora
+                </button>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ Section */}
+      <section id="faq" className="py-32 px-6 max-w-4xl mx-auto">
+        <div className="text-center mb-20">
+          <h2 className="text-4xl font-black text-slate-900 uppercase tracking-tighter italic">Dúvidas Frequentes</h2>
+        </div>
+        <div className="space-y-6">
+          {faqs.map((faq, i) => (
+            <div key={i} className="bg-white border border-slate-100 p-8 rounded-[2rem] shadow-sm">
+              <h4 className="text-lg font-black text-slate-900 mb-3 italic uppercase tracking-tighter">{faq.q}</h4>
+              <p className="text-slate-500 leading-relaxed font-medium">{faq.a}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {/* Footer */}
-      <footer className="py-20 bg-slate-900 text-white text-center">
-        <h3 className="text-3xl font-black mb-6">Pronto para dominar o mercado?</h3>
-        <p className="text-slate-400 mb-10">Junte-se a mais de 200 churrasqueiros de sucesso.</p>
-        <button
-          onClick={() => navigate("/venda/cadastro")}
-          className="bg-white text-orange-600 px-12 py-5 rounded-3xl font-black uppercase tracking-widest hover:scale-105 transition-all"
-        >
-          Criar Minha Loja Grátis
-        </button>
+      <footer className="bg-slate-950 text-white rounded-t-[4rem] px-6 py-32 overflow-hidden relative">
+        <div className="absolute bottom-0 right-0 w-[500px] h-[500px] bg-orange-600/10 blur-[150px] -z-10" />
+        <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-16 md:gap-8">
+          <div className="col-span-1 md:col-span-2">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-12 h-12 bg-orange-600 rounded-2xl flex items-center justify-center text-white shadow-2xl shadow-orange-900">
+                <UtensilsCrossed size={28} />
+              </div>
+              <span className="text-3xl font-black tracking-tighter italic uppercase">AP <span className="text-orange-600">Volt</span></span>
+            </div>
+            <p className="max-w-md text-slate-400 font-medium leading-relaxed mb-10">
+              A plataforma definitiva para quem quer escalar seu negócio de alimentação com tecnologia de ponta e experiência premium para o cliente.
+            </p>
+            <div className="flex gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center hover:bg-orange-600 transition-all cursor-pointer"><MessageCircle size={20} /></div>
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center hover:bg-orange-600 transition-all cursor-pointer"><Activity size={20} /></div>
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center hover:bg-orange-600 transition-all cursor-pointer"><Settings size={20} /></div>
+            </div>
+          </div>
+          <div>
+            <h5 className="font-black uppercase tracking-[0.2em] text-xs text-orange-500 mb-8">Navegação</h5>
+            <ul className="space-y-4 font-bold text-slate-400 text-sm">
+              <li><a href="#" className="hover:text-white transition-colors">Home</a></li>
+              <li><a href="#features" className="hover:text-white transition-colors">Funcionalidades</a></li>
+              <li><a href="#precos" className="hover:text-white transition-colors">Preços</a></li>
+              <li><a href="/login" className="hover:text-white transition-colors">Portal do Lojista</a></li>
+            </ul>
+          </div>
+          <div>
+            <h5 className="font-black uppercase tracking-[0.2em] text-xs text-orange-500 mb-8">Jurídico</h5>
+            <ul className="space-y-4 font-bold text-slate-400 text-sm">
+              <li><a href="#" className="hover:text-white transition-colors">Termos de Uso</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Privacidade</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">LGPD</a></li>
+              <li><a href="#" className="hover:text-white transition-colors">Cookies</a></li>
+            </ul>
+          </div>
+        </div>
+        <div className="max-w-7xl mx-auto border-t border-white/5 mt-24 pt-8 text-center md:text-left">
+          <p className="text-slate-600 text-xs font-bold uppercase tracking-widest">
+            © 2026 AP Volt Technologies. Todos os direitos reservados. 🍢 Powered by MenuFast.
+          </p>
+        </div>
       </footer>
     </div>
   );
