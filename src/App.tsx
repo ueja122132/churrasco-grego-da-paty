@@ -4534,7 +4534,7 @@ const SaaSLandingPage = () => {
             <div className="absolute inset-0 bg-gradient-to-tr from-orange-200/40 to-indigo-200/40 blur-[100px] -z-10 rounded-full" />
             <div className="premium-card p-2 rounded-[3rem] overflow-hidden shadow-3xl bg-white/40 backdrop-blur-sm border border-white/50">
               <img
-                src="https://churrascogregodapaty.com/brain/7be1ba11-60a3-4ca8-97de-7070e90baa26/saas_hero_mockup_1772929768933.png"
+                src="/saas-hero.png"
                 alt="Interface do Sistema"
                 className="w-full rounded-[2.5rem] shadow-2xl object-cover"
               />
