@@ -576,9 +576,9 @@ const TenantProvider = ({ children }: { children: React.ReactNode }) => {
 
     // Reserved keywords that should not be treated as slugs
     const reservedKeywords = [
-      'admin', 'venda', 'login', 'register', 'assinar', 'rastreio',
-      'kitchen', 'delivery', 'finance', 'saas-admin', 'super-admin',
-      'profile', 'courier-dashboard', 'courier'
+      'admin', 'venda', 'login', 'loguin', 'loging', 'register', 'assinar',
+      'rastreio', 'kitchen', 'delivery', 'finance', 'saas-admin', 'super-admin',
+      'profile', 'courier-dashboard', 'courier', 'loja'
     ];
 
     let slug: string | null = null;
@@ -608,11 +608,14 @@ const TenantProvider = ({ children }: { children: React.ReactNode }) => {
         }
       } catch (err) {
         console.warn("Could not load organization:", err);
-        // Só faz o fallback final se realmente não houver usuário ou slug
-        if (!user && !finalSlug && !org) {
+        // Garantir fallback para Paty se falhar tudo e não houver usuário logado
+        if (!user && !org) {
+          console.log("[TENANT] Fallback para paty-churrasco após erro.");
           const r = await fetch(`/api/org/detect?slug=paty-churrasco`);
-          const fallbackData = await r.json();
-          setOrg(fallbackData);
+          if (r.ok) {
+            const fallbackData = await r.json();
+            setOrg(fallbackData);
+          }
         }
       } finally {
         setLoading(false);
