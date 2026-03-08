@@ -992,15 +992,15 @@ const SalesPage = () => {
             <UtensilsCrossed size={48} />
           </div>
         )}
-        <div>
+        <div className="flex-1 min-w-0 w-full overflow-hidden">
           {!isShopOpen && (
             <div className="bg-red-600 text-white p-4 rounded-3xl mb-6 flex items-center justify-center gap-3 animate-pulse shadow-xl border-4 border-red-500/50">
               <Clock size={20} className="animate-spin-slow" />
-              <span className="font-black uppercase tracking-widest text-xs">Loja Fechada - Não estamos aceitando pedidos</span>
+              <span className="font-black uppercase tracking-widest text-xs text-center">Loja Fechada - Não estamos aceitando pedidos</span>
             </div>
           )}
-          <h1 className="text-4xl md:text-6xl font-black text-slate-900 tracking-tighter uppercase italic">
-            <span className="text-gradient">{org?.name || "Premium Store"}</span>
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-black text-slate-900 tracking-tighter uppercase italic break-words shrink-0">
+            <span className="text-gradient leading-tight">{org?.name || "Premium Store"}</span>
           </h1>
           <p className="text-slate-500 mt-2 font-medium tracking-wide">Bem-vindo ao melhor sabor da região!</p>
           <div className="mt-3 flex items-center gap-2">
