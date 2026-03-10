@@ -1,0 +1,43 @@
+# Provisionamento de Domínio (White Label Real)
+
+## Objetivo
+Implementar um sistema profissional de White Label onde os tenants (lojas) possam configurar seus domínios customizados (ex: `www.churrascoajeu.com.br`), ver as instruções de DNS e o sistema verifique automaticamente se o apontamento está correto.
+
+## Mudanças Propostas
+
+### 1. Banco de Dados (Supabase)
+Precisamos adicionar um controle de status para o domínio customizado para sabermos se ele já foi verificado e está ativo.
+
+#### [NEW] Migration: Add Domain Status
+- Adicionar coluna `custom_domain_status` (text) na tabela `organizations` com valor padrão `'pending'`. Valores possíveis: `'pending'`, `'active'`, `'failed'`.
+
+### 2. Backend (Node.js)
+Criar um endpoint para validar o domínio através de resolução DNS.
+
+#### [MODIFY] [server.ts](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/server.ts)
+- Adicionar rota `POST /api/organizations/:id/verify-domain`:
+  - Usar o módulo `dns` do Node.js (`dns.promises.resolveCname` ou `dns.promises.resolve4`).
+  - Verificar se o `custom_domain` da loja aponta para um CNAME esperado (ex: `app.apvoltcar.com` - *precisaremos definir qual é o CNAME padrão da plataforma*) ou IP.
+  - Atualizar o `custom_domain_status` para `'active'` se o DNS estiver correto, ou `'failed'` se não estiver.
+
+### 3. Frontend (Interface do SaaS Admin)
+Criar uma interface para o lojista gerenciar seu domínio.
+
+#### [MODIFY] [src/App.tsx](file:///C:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx) (SaaSAdminPage)
+- Adicionar uma nova aba ou seção de "Configurações de Domínio" (White Label).
+- Campo para o usuário digitar seu domínio (ex: `meudominio.com.br`).
+- Exibir painel com instruções claras:
+  - Tipo: `CNAME`
+  - Nome: `www` ou `@`
+  - Destino: `[URL da plataforma]`
+- Botão "Verificar Apontamento" que chama a rota de verificação.
+- Feedback visual do status (`Pendente`, `Verificado ✅`, `Falha ❌`).
+
+## Verificação
+- Configurar manualmente um domínio local ou mock na máquina para testar a rota de DNS.
+- Garantir que a detecção do tenant (que já existe na `/api/org/detect`) continue funcionando lindamente com o novo domínio após a verificação de status.
+
+## User Review Required
+> [!IMPORTANT]
+> Precisamos definir: Para qual IP ou CNAME o cliente deve apontar o domínio dele no painel do provedor (Registro.br, Cloudflare, etc.)?
+> Vou usar `app.plataforma.com.br` como exemplo nas instruções temporariamente, por favor confirme como a plataforma será hospedada para ajustarmos o alvo do CNAME.

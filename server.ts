@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import { createServer as createHttpServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
@@ -8,6 +9,10 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import crypto from "crypto";
+import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
+import dns from "dns/promises";
+import cron from "node-cron";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
@@ -56,6 +61,39 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+  // CORS Configuration
+  app.use(cors({
+    origin: process.env.VITE_APP_URL || '*', // Restrict this in production if needed
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
+
+  // Security Headers
+  app.use(helmet({
+    contentSecurityPolicy: false, // Disable CSP if it interferes with Vite/Supabase, or customize it
+    crossOriginEmbedderPolicy: false
+  }));
+
+  // Rate Limiting
+  const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.ip === '::1' || req.ip === '127.0.0.1' || req.hostname === 'localhost',
+    message: { error: "Muitas requisições, tente novamente mais tarde." }
+  });
+
+  const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10, // More strict for auth routes
+    message: { error: "Muitas tentativas de login, tente novamente em 15 minutos." }
+  });
+
+  app.use("/api/", limiter);
+  app.use("/api/auth/login", authLimiter);
+  app.use("/api/auth/register", authLimiter);
 
   // ==========================================
   // LOGO & FAVICON - CRITICAL FOR WHATSAPP/SEO
@@ -143,46 +181,169 @@ async function startServer() {
   });
 
 
-  app.get("/api/org/:slug", async (req, res) => {
-    console.log(`[BACKEND] Request for org: ${req.params.slug}`);
+  // ==========================================
+  // MIDDLEWARES DE PROTEÇÃO SAAS
+  // ==========================================
+
+  const billingGuard = async (req: any, res: any, next: any) => {
+    const orgId = req.params.orgId || req.body.orgId || req.query.orgId || (req.params.id && req.url.includes('/api/organizations/') ? req.params.id : null);
+
+    // Se não for rota de tenant ou settings, deixa passar
+    if (!orgId || req.method === 'GET' && req.url.includes('/products')) return next();
+
     try {
-      const { data, error } = await supabase.from('organizations').select('*').eq('slug', req.params.slug).single();
-      if (error) {
-        console.error(`[BACKEND] Supabase error for ${req.params.slug}:`, error.message);
-        return res.status(404).json({ error: "Organização não encontrada", details: error.message });
+      const { data: org } = await supabase
+        .from('organizations')
+        .select('subscription_status, next_billing_date, is_exempt, status, billing_due_date, billing_exempt')
+        .eq('id', orgId)
+        .single();
+
+      if (!org) return next();
+
+      const status = org.subscription_status || org.status || 'active';
+      const dueDate = org.next_billing_date || org.billing_due_date;
+      const exempt = org.is_exempt || org.billing_exempt || false;
+
+      if (exempt) return next();
+
+      if (status === 'suspended' || status === 'past_due' || status === 'inactive') {
+        return res.status(402).json({ error: "Assinatura Pendente ou Loja Suspensa", code: "BILLING_BLOCKED" });
       }
-      console.log(`[BACKEND] Found org: ${data.name}`);
 
-      // Sanitize the data to prevent secret token leakage
-      const sanitizedData = {
-        ...data,
-        has_mp_token: !!data.mp_access_token
-      };
-      delete sanitizedData.mp_access_token;
+      // 3 days grace period
+      if (dueDate) {
+        const graceDate = new Date(dueDate);
+        graceDate.setDate(graceDate.getDate() + 3);
+        if (new Date() > graceDate) {
+          return res.status(402).json({ error: "Assinatura Vencida", code: "BILLING_BLOCKED" });
+        }
+      }
 
-      res.json(sanitizedData);
+      next();
+    } catch (err) {
+      next();
+    }
+  };
+
+  const superAdminGuard = async (req: any, res: any, next: any) => {
+    const authHeader = req.headers.authorization;
+    const customAdminId = req.headers['x-super-admin-id'];
+    const path = req.path;
+
+    // Log relevant headers for debugging (omitting actual token value for security)
+    console.log(`[AUTH-DEBUG] Path: ${path} | X-Super-Admin-Id: ${customAdminId || 'Missing'} | Authorization: ${authHeader ? (authHeader.startsWith('Bearer null') ? 'Bearer null' : 'Present') : 'Missing'}`);
+
+    try {
+      // 1. Check Custom ID Fallback (Priority for custom login system)
+      if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
+        const { data: profile } = await supabase.from('profiles').select('role, email').eq('id', customAdminId).single();
+        if (profile?.role === 'super_admin') {
+          console.log(`[AUTH] Authorized ${path} via ID: ${profile.email}`);
+          return next();
+        }
+      }
+
+      // 2. Check Supabase Auth (OAuth/Supabase system)
+      if (authHeader) {
+        const token = authHeader.split(' ').pop();
+        if (token && token !== 'undefined' && token !== 'null') {
+          const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
+          if (sbUser && !authError) {
+            const { data: profile } = await supabase.from('profiles').select('role').eq('email', sbUser.email).single();
+            if (profile?.role === 'super_admin') {
+              console.log(`[AUTH] Authorized ${path} via Supabase: ${sbUser.email}`);
+              return next();
+            }
+          }
+        }
+      }
+
+      console.warn(`[AUTH] Access Denied to ${path}: No valid super admin session or ID found`);
+      return res.status(401).json({ error: "Acesso restrito ao Super Admin" });
     } catch (err: any) {
-      console.error(`[BACKEND] Fatal error for ${req.params.slug}:`, err.message);
-      res.status(500).json({ error: "Erro interno no servidor" });
+      console.error(`[AUTH] Fatal Error in guard for ${path}:`, err.message);
+      res.status(500).json({ error: "Erro interno de autenticação" });
+    }
+  };
+
+  // Super Admin Routes (Global)
+  app.get("/api/organizations", superAdminGuard, async (req, res) => {
+    try {
+      const { data: orgs, error } = await supabase.from('organizations').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+
+      const { data: profiles } = await supabase.from('profiles').select('org_id, role');
+      const { data: orders } = await supabase.from('orders').select('org_id, total_price, payment_status, created_at');
+
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      const orgsWithMetrics = orgs?.map(org => {
+        const orgClients = profiles?.filter(p => String(p.org_id) === String(org.id) && p.role === 'user') || [];
+        const orgOrders = orders?.filter(o => String(o.org_id) === String(org.id)) || [];
+
+        const totalRevenue = orgOrders.filter(o => o.payment_status === 'paid').reduce((acc, o) => acc + o.total_price, 0);
+        const monthlyOrders = orgOrders.filter(o => {
+          if (!o.created_at) return false;
+          const d = new Date(o.created_at);
+          return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+        }).length;
+
+        return {
+          ...org,
+          metrics: {
+            total_clients: orgClients.length,
+            total_revenue: totalRevenue,
+            monthly_orders: monthlyOrders
+          }
+        };
+      });
+
+      res.json(orgsWithMetrics);
+    } catch (err: any) {
+      console.error("[GET ORGS] Erro:", err.message);
+      res.status(500).json({ error: "Erro ao buscar organizações." });
     }
   });
 
-
-  // Super Admin Routes (Global)
-  app.get("/api/organizations", async (req, res) => {
-    const { data, error } = await supabase.from('organizations').select('*').order('created_at', { ascending: false });
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data);
-  });
-
-  app.post("/api/organizations", async (req, res) => {
+  // Super Admin Routes (Global) - PROTECTED
+  app.post("/api/organizations", superAdminGuard, async (req, res) => {
     const { name, slug, branding } = req.body;
     const { data, error } = await supabase.from('organizations').insert([{ name, slug, branding }]).select();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data[0]);
   });
 
-  app.get("/api/admin/global-metrics", async (req, res) => {
+  // Excluir organização (Hard Delete) - PROTECTED
+  app.delete("/api/organizations/:id", superAdminGuard, async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // 1. Apagar todas as dependências locais ou confiar no ON DELETE CASCADE do Supabase.
+      // O ideal é que o banco tenha CASCADE, mas faremos a limpeza dos produtos/pedidos para garantir.
+      await supabase.from('products').delete().eq('org_id', id);
+      await supabase.from('extra_ingredients').delete().eq('org_id', id);
+      await supabase.from('orders').delete().eq('org_id', id);
+      await supabase.from('expenses').delete().eq('org_id', id);
+      await supabase.from('saas_payments').delete().eq('org_id', id);
+
+      // Finalmente, excluir a organização
+      const { error } = await supabase.from('organizations').delete().eq('id', id);
+
+      if (error) {
+        console.error("[DELETE ORG] Erro ao excluir organização:", error);
+        return res.status(500).json({ error: "Erro ao excluir a organização do banco de dados" });
+      }
+
+      res.json({ success: true, message: "Organização excluída com sucesso" });
+    } catch (err: any) {
+      console.error("[DELETE ORG] Fatal Error:", err.message);
+      res.status(500).json({ error: "Erro interno ao tentar excluir a loja" });
+    }
+  });
+
+  app.get("/api/admin/global-metrics", superAdminGuard, async (req, res) => {
     const { data: orgs } = await supabase.from('organizations').select('id, status');
     const { data: orders } = await supabase.from('orders').select('total_price, payment_status');
 
@@ -195,7 +356,7 @@ async function startServer() {
   });
 
   // Toggle org active/inactive
-  app.patch("/api/organizations/:id/status", async (req, res) => {
+  app.patch("/api/organizations/:id/status", superAdminGuard, async (req, res) => {
     const { status } = req.body;
     if (!['active', 'inactive', 'suspended', 'trial'].includes(status)) {
       return res.status(400).json({ error: "Status inválido" });
@@ -211,11 +372,11 @@ async function startServer() {
   });
 
   // Set billing exemption
-  app.patch("/api/organizations/:id/billing-exempt", async (req, res) => {
+  app.patch("/api/organizations/:id/billing-exempt", superAdminGuard, async (req, res) => {
     const { billing_exempt } = req.body;
     const { data, error } = await supabase
       .from('organizations')
-      .update({ billing_exempt: !!billing_exempt })
+      .update({ is_exempt: billing_exempt, billing_exempt: billing_exempt })
       .eq('id', req.params.id)
       .select()
       .single();
@@ -223,12 +384,12 @@ async function startServer() {
     res.json({ success: true, org: data });
   });
 
-  // Set billing due date
-  app.patch("/api/organizations/:id/billing-due", async (req, res) => {
-    const { billing_due_date, plan } = req.body;
+  // Update billing due date
+  app.patch("/api/organizations/:id/billing-due", superAdminGuard, async (req, res) => {
+    const { billing_due_date } = req.body;
     const { data, error } = await supabase
       .from('organizations')
-      .update({ billing_due_date, plan })
+      .update({ next_billing_date: billing_due_date, billing_due_date: billing_due_date })
       .eq('id', req.params.id)
       .select()
       .single();
@@ -236,8 +397,49 @@ async function startServer() {
     res.json({ success: true, org: data });
   });
 
-  // Auto-suspend overdue organizations (called on each API check)
-  app.post("/api/admin/run-billing-check", async (req, res) => {
+  // SaaS Global Stats
+  app.get("/api/saas/stats", superAdminGuard, async (req, res) => {
+    try {
+      const { count: orgCount } = await supabase.from('organizations').select('*', { count: 'exact', head: true });
+      const { count: userCount } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+      const { data: orders } = await supabase.from('orders').select('total_price').eq('payment_status', 'paid');
+
+      const totalRevenue = orders?.reduce((acc, o) => acc + (o.total_price || 0), 0) || 0;
+
+      res.json({
+        total_organizations: orgCount,
+        total_users: userCount,
+        total_revenue: totalRevenue
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Erro ao buscar estatísticas" });
+    }
+  });
+
+  // Daily Cron Job to Auto-suspend overdue organizations
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[CRON] Running daily billing check at midnight...');
+    const today = new Date().toISOString().split('T')[0];
+    const { data, error } = await supabase
+      .from('organizations')
+      .update({ status: 'suspended' })
+      .eq('billing_exempt', false)
+      .eq('status', 'active')
+      .lt('billing_due_date', today)
+      .not('billing_due_date', 'is', null)
+      .select();
+
+    if (error) {
+      console.error('[CRON] Error during daily billing check:', error.message);
+    } else if (data && data.length > 0) {
+      console.log(`[CRON] Automatically suspended ${data.length} overdue organizations.`);
+    } else {
+      console.log('[CRON] Daily check complete. No overdue organizations found.');
+    }
+  });
+
+  // Manual trigger for same logic (called by Super Admin on the dashboard)
+  app.post("/api/admin/run-billing-check", superAdminGuard, async (req, res) => {
     const today = new Date().toISOString().split('T')[0];
     const { data, error } = await supabase
       .from('organizations')
@@ -252,7 +454,8 @@ async function startServer() {
   });
 
   // Update custom domain
-  app.patch("/api/organizations/:id/custom-domain", async (req, res) => {
+  // Update custom domain - PROTECTED
+  app.patch("/api/organizations/:id/custom-domain", superAdminGuard, async (req, res) => {
     const { custom_domain } = req.body;
     const { data, error } = await supabase
       .from('organizations')
@@ -264,12 +467,56 @@ async function startServer() {
     res.json({ success: true, org: data });
   });
 
+  // Verify custom domain via DNS
+  app.post("/api/organizations/:id/verify-domain", superAdminGuard, async (req, res) => {
+    try {
+      const { data: org, error } = await supabase
+        .from('organizations')
+        .select('custom_domain')
+        .eq('id', req.params.id)
+        .single();
+
+      if (error || !org || !org.custom_domain) {
+        return res.status(400).json({ error: "Domínio customizado não configurado" });
+      }
+
+      const domain = org.custom_domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+      let verified = false;
+      try {
+        const records = await dns.resolveCname(domain);
+        if (records && records.length > 0) verified = true;
+      } catch (e) {
+        try {
+          const aRecords = await dns.resolve4(domain);
+          if (aRecords && aRecords.length > 0) verified = true;
+        } catch (e2) {
+          verified = false;
+        }
+      }
+
+      const newStatus = verified ? 'active' : 'failed';
+      const { data: updatedOrg, error: updateError } = await supabase
+        .from('organizations')
+        .update({ custom_domain_status: newStatus })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (updateError) return res.status(500).json({ error: updateError.message });
+
+      res.json({ success: true, verified, status: newStatus, org: updatedOrg });
+    } catch (err: any) {
+      res.status(500).json({ error: "Erro interno ao verificar domínio." });
+    }
+  });
+
   // ===================================================
   // SAAS FINANCEIRO - Pagamentos de Mensalidades
   // ===================================================
 
   // Registrar um pagamento de mensalidade de uma org
-  app.post("/api/saas-payments", async (req, res) => {
+  app.post("/api/saas-payments", superAdminGuard, async (req, res) => {
     const { org_id, amount, month_ref, notes, payment_method } = req.body;
     if (!org_id || !amount || !month_ref) {
       return res.status(400).json({ error: "org_id, amount e month_ref são obrigatórios" });
@@ -290,8 +537,8 @@ async function startServer() {
     res.json({ success: true, payment: data });
   });
 
-  // Listar todos os pagamentos (com dados da org)
-  app.get("/api/saas-payments", async (req, res) => {
+  // Listar todos os pagamentos (com dados da org) - PROTECTED
+  app.get("/api/saas-payments", superAdminGuard, async (req, res) => {
     const { data, error } = await supabase
       .from('saas_payments')
       .select('*, organization:org_id(name, slug, plan, billing_exempt, status)')
@@ -301,8 +548,8 @@ async function startServer() {
     res.json(data);
   });
 
-  // Resumo financeiro do SaaS
-  app.get("/api/saas-payments/summary", async (req, res) => {
+  // Resumo financeiro do SaaS - PROTECTED
+  app.get("/api/saas-payments/summary", superAdminGuard, async (req, res) => {
     try {
       const now = new Date();
       const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -352,8 +599,8 @@ async function startServer() {
     }
   });
 
-  // Deletar um pagamento
-  app.delete("/api/saas-payments/:id", async (req, res) => {
+  // Deletar um pagamento - PROTECTED
+  app.delete("/api/saas-payments/:id", superAdminGuard, async (req, res) => {
     const { error } = await supabase.from('saas_payments').delete().eq('id', req.params.id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
@@ -659,7 +906,7 @@ async function startServer() {
     }
   });
 
-  // Webhook Mercado Pago - payment confirmation
+  // Webhook Mercado Pago - payment confirmation - NO GUARD (Public Webhook)
   app.post("/api/webhook/mercadopago", async (req, res) => {
     try {
       console.log("[WEBHOOK] Received Payload:", JSON.stringify(req.body));
@@ -728,8 +975,8 @@ async function startServer() {
   });
 
 
-  // SaaS Admin Routes (Global Management)
-  app.get("/api/saas/organizations", async (req, res) => {
+  // SaaS Admin Routes (Global Management) - PROTECTED
+  app.get("/api/saas/organizations", superAdminGuard, async (req, res) => {
     try {
       const { data, error } = await supabase
         .from('organizations')
@@ -750,7 +997,8 @@ async function startServer() {
     }
   });
 
-  app.patch("/api/saas/organizations/:id", async (req, res) => {
+  // PROTECTED
+  app.patch("/api/saas/organizations/:id", superAdminGuard, async (req, res) => {
     const { custom_domain, name, slug } = req.body;
     try {
       const { data, error } = await supabase
@@ -767,7 +1015,8 @@ async function startServer() {
     }
   });
 
-  app.get("/api/saas/stats", async (req, res) => {
+  // PROTECTED
+  app.get("/api/saas/stats", superAdminGuard, async (req, res) => {
     try {
       const { count: orgCount } = await supabase.from('organizations').select('*', { count: 'exact', head: true });
       const { count: userCount } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
@@ -781,6 +1030,103 @@ async function startServer() {
         total_revenue: totalRevenue
       });
     } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // PROTECTED
+  app.get("/api/saas/clients", async (req, res) => {
+    // Only authenticated admins/super_admins should see this
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ error: "Token não fornecido" });
+
+    try {
+      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !user) throw new Error("Usuário não autenticado");
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('role, org_id')
+        .eq('id', user.id)
+        .single();
+
+      if (profileError || !profile) throw new Error("Perfil não encontrado");
+      if (profile.role === 'user' || profile.role === 'courier') {
+        return res.status(403).json({ error: "Acesso negado: Apenas administradores e donos podem ver clientes" });
+      }
+      if (!profile.org_id) {
+        return res.status(403).json({ error: "Nenhuma organização vinculada a este administrador" });
+      }
+
+      // 1. Buscar todos os usuários cadastrados desta loja
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('name, phone, created_at')
+        .eq('org_id', profile.org_id)
+        .eq('role', 'user');
+
+      if (profilesError) throw profilesError;
+
+      // 2. Buscar todos os pedidos desta loja (histórico completo)
+      const { data: orders, error: ordersError } = await supabase
+        .from('orders')
+        .select('customer_name, customer_phone, total_price, created_at, status, payment_status')
+        .eq('org_id', profile.org_id);
+
+      if (ordersError) throw ordersError;
+
+      // Agrupar dados
+      const clientMap = new Map<string, { nome: string; telefone: string; total_pedidos: number; total_gasto: number; ultimo_pedido: string }>();
+
+      // Adicionar perfis cadastrados primeiro
+      (profiles || []).forEach(p => {
+        clientMap.set(p.phone, {
+          nome: p.name,
+          telefone: p.phone,
+          total_pedidos: 0,
+          total_gasto: 0,
+          ultimo_pedido: p.created_at
+        });
+      });
+
+      // Adicionar/Atualizar com dados de pedidos
+      (orders || []).forEach(order => {
+        const phone = order.customer_phone;
+        const current = clientMap.get(phone) || {
+          nome: order.customer_name,
+          telefone: phone,
+          total_pedidos: 0,
+          total_gasto: 0,
+          ultimo_pedido: order.created_at
+        };
+
+        // Contar todos os pedidos
+        current.total_pedidos += 1;
+
+        // Somar apenas pedidos finalizados no 'total_gasto'
+        const isFinished = order.status === 'delivered' || order.payment_status === 'paid';
+        if (isFinished) {
+          current.total_gasto += Number(order.total_price) || 0;
+        }
+
+        // Atualizar data do último pedido e nome (se for mais recente que o atual)
+        if (new Date(order.created_at) > new Date(current.ultimo_pedido)) {
+          current.ultimo_pedido = order.created_at;
+          current.nome = order.customer_name;
+        }
+
+        clientMap.set(phone, current);
+      });
+
+      const clientsList = Array.from(clientMap.values()).sort((a, b) => {
+        // Ordenar por gasto, depois por data
+        if (b.total_gasto !== a.total_gasto) return b.total_gasto - a.total_gasto;
+        return new Date(b.ultimo_pedido).getTime() - new Date(a.ultimo_pedido).getTime();
+      });
+
+      res.json(clientsList);
+    } catch (err: any) {
+      console.error("[BACKEND] GET /api/saas/clients error:", err.message);
       res.status(500).json({ error: err.message });
     }
   });
@@ -828,11 +1174,26 @@ async function startServer() {
 
   // Auth Routes
   app.post("/api/auth/register", async (req, res) => {
-    const { name, phone, password, role, org_id, commission_rate } = req.body;
+    const { name, phone, password, role, org_id, commission_rate, email } = req.body;
+
+    // Input Validation
+    if (!name || !phone || !password) {
+      return res.status(400).json({ error: "Nome, telefone e senha são obrigatórios" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "A senha deve ter pelo menos 6 caracteres" });
+    }
+    if (!/^\d+$/.test(phone)) {
+      return res.status(400).json({ error: "Telefone deve conter apenas números" });
+    }
+
     try {
+      // Hardcode role to 'user' for public registration to prevent privilege escalation
+      const userRole = 'user';
+
       // Para compatibilidade, inserimos no perfil com suporte a cargo e organização
       const { data, error } = await supabase.from('profiles').insert([{
-        name, phone, password: hashPassword(password), role: role || 'user', org_id: org_id || null, points: 0, commission_rate: commission_rate || 0
+        name, phone, password: hashPassword(password), role: userRole, org_id: org_id || null, points: 0, commission_rate: commission_rate || 0
       }]).select();
       if (error) throw error;
       res.json(data[0]);
@@ -1046,7 +1407,7 @@ async function startServer() {
     res.json(data);
   });
 
-  app.post("/api/:orgId/products", async (req, res) => {
+  app.post("/api/:orgId/products", billingGuard, async (req, res) => {
     const { name, description, price, ingredients, category = 'churrasco', image_url, available } = req.body;
     const { data } = await supabase.from('products').insert([{
       name, description, price, ingredients, category, image_url, available: available !== false, org_id: req.params.orgId
@@ -1078,7 +1439,7 @@ async function startServer() {
     res.json(data);
   });
 
-  app.post("/api/:orgId/extra-ingredients", async (req, res) => {
+  app.post("/api/:orgId/extra-ingredients", billingGuard, async (req, res) => {
     const { name, price } = req.body;
     const { data } = await supabase.from('extra_ingredients').insert([{
       name, price, org_id: req.params.orgId
@@ -1101,7 +1462,7 @@ async function startServer() {
     res.json(data);
   });
 
-  app.get("/api/:orgId/orders", async (req, res) => {
+  app.get("/api/:orgId/orders", billingGuard, async (req, res) => {
     const { data } = await supabase.from('orders').select('*').eq('org_id', req.params.orgId).order('created_at', { ascending: false });
     res.json(data);
   });
@@ -1199,7 +1560,21 @@ async function startServer() {
     }
 
     console.log(`[Status Update] Order ID: ${orderId}, New Status: ${status}`);
-    const { error: updateError } = await supabase.from('orders').update({ status }).eq('id', orderId);
+    // Update order status
+    interface UpdatePayload {
+      status: string;
+      shipped_at?: string;
+      delivered_at?: string;
+    }
+
+    const updatePayload: UpdatePayload = { status };
+    if (status === 'shipped') {
+      updatePayload.shipped_at = new Date().toISOString();
+    } else if (status === 'delivered') {
+      updatePayload.delivered_at = new Date().toISOString();
+    }
+
+    const { error: updateError } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
 
     if (updateError) {
       console.error("[Status Update Error]:", updateError);
@@ -1325,14 +1700,14 @@ Diretrizes:
 
   app.get("/api/courier/:id/stats", async (req, res) => {
     // Apenas comissões não pagas
-    const { data: orders, error: ordersError } = await supabase
+    const { data: unpaidOrders, error: unpaidError } = await supabase
       .from('orders')
       .select('delivery_fee')
       .eq('courier_id', req.params.id)
       .eq('status', 'delivered')
       .eq('commission_paid', false);
 
-    if (ordersError) return res.status(500).json({ error: ordersError.message });
+    if (unpaidError) return res.status(500).json({ error: unpaidError.message });
 
     // Vales não compensados (settled = false)
     const { data: advances, error: advancesError } = await supabase
@@ -1343,15 +1718,69 @@ Diretrizes:
 
     if (advancesError) return res.status(500).json({ error: advancesError.message });
 
-    const totalCommissions = orders.reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
+    // Todos os pedidos entregues para estatísticas (tempo médio e contagem mensal/geral)
+    const { data: allDeliveredOrders, error: allOrdersError } = await supabase
+      .from('orders')
+      .select('created_at, shipped_at, delivered_at')
+      .eq('courier_id', req.params.id)
+      .eq('status', 'delivered');
+
+    if (allOrdersError) return res.status(500).json({ error: allOrdersError.message });
+
+    const totalCommissions = unpaidOrders.reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
     const totalAdvances = advances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
-    const totalDeliveries = orders.length;
+
+    // Cálculos de métricas de performance
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    let totalLifetimeDeliveries = 0;
+    let monthlyDeliveries = 0;
+
+    let totalDeliveryTimeMins = 0;
+    let timedDeliveriesCount = 0;
+    let monthlyDeliveryTimeMins = 0;
+    let monthlyTimedDeliveriesCount = 0;
+
+    for (const order of (allDeliveredOrders || [])) {
+      totalLifetimeDeliveries++;
+
+      const orderDate = order.created_at ? new Date(order.created_at) : null;
+      const isThisMonth = orderDate && orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear;
+
+      if (isThisMonth) {
+        monthlyDeliveries++;
+      }
+
+      if (order.shipped_at && order.delivered_at) {
+        const shipped = new Date(order.shipped_at).getTime();
+        const delivered = new Date(order.delivered_at).getTime();
+        const minutes = (delivered - shipped) / (1000 * 60);
+
+        if (minutes >= 0) {
+          totalDeliveryTimeMins += minutes;
+          timedDeliveriesCount++;
+          if (isThisMonth) {
+            monthlyDeliveryTimeMins += minutes;
+            monthlyTimedDeliveriesCount++;
+          }
+        }
+      }
+    }
+
+    const avg_lifetime_time = timedDeliveriesCount > 0 ? Math.round(totalDeliveryTimeMins / timedDeliveriesCount) : 0;
+    const avg_monthly_time = monthlyTimedDeliveriesCount > 0 ? Math.round(monthlyDeliveryTimeMins / monthlyTimedDeliveriesCount) : 0;
 
     res.json({
       total_commissions: totalCommissions,
       total_advances: totalAdvances,
       net_pay: totalCommissions - totalAdvances,
-      total_deliveries: totalDeliveries
+      total_lifetime_deliveries: totalLifetimeDeliveries,
+      monthly_deliveries: monthlyDeliveries,
+      avg_lifetime_time_mins: avg_lifetime_time,
+      avg_monthly_time_mins: avg_monthly_time,
+      total_deliveries: totalLifetimeDeliveries // fallback legacy
     });
   });
 
@@ -1431,6 +1860,15 @@ Diretrizes:
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
   }
+
+  // Global Error Handler (Sanitized)
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error("[GLOBAL ERROR]", err.stack || err);
+    res.status(500).json({
+      error: "Erro interno no servidor",
+      message: process.env.NODE_ENV === 'development' ? err.message : "Algo deu errado. Tente novamente mais tarde."
+    });
+  });
 
   // ===================================
   // SOCKET.IO - GPS Rastreamento

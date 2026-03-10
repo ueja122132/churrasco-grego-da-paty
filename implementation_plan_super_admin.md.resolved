@@ -1,0 +1,31 @@
+# Separação e Isolamento do Painel Super Admin
+
+Este plano descreve as alterações necessárias para isolar o painel Super Admin da lógica de tenant (loja) e da identidade visual individual, criando uma experiência de "Plataforma" neutra e segura.
+
+## Alterações Propostas
+
+### Frontend ([src/App.tsx](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx))
+
+#### [MODIFY] [App.tsx](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx)
+
+1. **Modo Plataforma em [AppInner](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#467-618)**:
+   - Criar uma variável `isPlatformRoute` que identifica se o usuário está em `/super-admin`, `/saas-admin`, `/venda`, etc.
+   - Condicionalizar a injeção de CSS (branding): se for `isPlatformRoute`, usar cores neutras da plataforma (ex: Slate/Indigo) em vez das cores da organização.
+   - Ocultar a [Navbar](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#265-339) padrão e o [AIAssistant](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#340-466) (Paty) em rotas de plataforma.
+   
+2. **Refatoração do [TenantProvider](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#619-742)**:
+   - Ajustar a detecção para ser "silenciosa" em rotas de plataforma, evitando requests desnecessários ou estados de carregamento que bloqueiem a interface administrativa global.
+
+3. **Layout do Super Admin**:
+   - Melhorar o isolamento visual do [SuperAdminPage](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#6169-7027) para que ele não pareça fazer parte de uma loja específica.
+
+## Plano de Verificação
+
+### Verificação Manual
+1. Acessar `/super-admin` com um usuário Super Admin e verificar se:
+   - As cores são as da plataforma (neutras), não as da loja (laranja/vermelho).
+   - A [Navbar](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#265-339) da loja e a assistente "Paty" não aparecem.
+2. Acessar uma loja (ex: `/paty-churrasco`) e verificar se:
+   - O branding da loja continua funcionando normalmente.
+   - A [Navbar](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#265-339) e a assistente "Paty" aparecem.
+3. Tentar acessar `/super-admin` com um usuário comum e verificar se o redirecionamento para o login/home continua funcionando.

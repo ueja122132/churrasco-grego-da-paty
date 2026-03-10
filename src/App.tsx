@@ -42,6 +42,8 @@ import {
   Bell,
   Map
 } from "lucide-react";
+import StoreLanding from "./components/StoreLanding";
+import LoginModal from "./components/LoginModal";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BarChart,
@@ -65,6 +67,25 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+function getTimeAgo(dateString: string) {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffTime = Math.abs(now.getTime() - date.getTime());
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return 'Hoje';
+  if (diffDays === 1) return 'Há 1 dia';
+  if (diffDays < 30) return `Há ${diffDays} dias`;
+
+  const diffMonths = Math.floor(diffDays / 30);
+  if (diffMonths === 1) return 'Há 1 mês';
+  if (diffMonths < 12) return `Há ${diffMonths} meses`;
+
+  const diffYears = Math.floor(diffMonths / 12);
+  return diffYears === 1 ? 'Há 1 ano' : `Há ${diffYears} anos`;
 }
 
 // Types
@@ -163,11 +184,15 @@ interface Organization {
     logoUrl: string | null;
   };
   has_mp_token?: boolean;
+  subscription_status?: 'active' | 'past_due' | 'trialing' | 'canceled';
+  next_billing_date?: string;
+  is_exempt?: boolean;
 }
 
 const TenantContext = React.createContext<{
   org: Organization | null;
   loading: boolean;
+  isBlocked: boolean;
 } | null>(null);
 
 const useTenant = () => {
@@ -296,9 +321,9 @@ const Navbar = () => {
           className="w-12 h-12 rounded-xl flex items-center justify-center bg-white shadow-sm border border-gray-100"
         >
           {org?.branding?.logoUrl ? (
-            <img src={org.branding.logoUrl} alt={org.name} className="w-10 h-10 object-contain" />
+            <img src={org.branding.logoUrl} alt={`Logo de ${org.name}`} className="w-10 h-10 object-contain" />
           ) : (
-            <UtensilsCrossed className="text-[var(--primary)] w-8 h-8" />
+            <UtensilsCrossed title="Logo Padrão" className="text-[var(--primary)] w-8 h-8" />
           )}
         </motion.div>
         <div
@@ -315,6 +340,8 @@ const Navbar = () => {
           <Link
             key={item.path}
             to={item.path}
+            title={item.label}
+            aria-label={item.label}
             className={cn(
               "flex flex-col items-center p-3 rounded-2xl transition-all duration-300",
               isActive
@@ -397,7 +424,7 @@ const AIAssistant = () => {
                 <p className="text-[10px] text-orange-200 uppercase font-bold tracking-widest">Especialista em Churrasco</p>
               </div>
             </div>
-            <button onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-colors">
+            <button title="Fechar" onClick={() => setIsOpen(false)} className="hover:bg-white/10 p-2 rounded-xl transition-colors">
               <X size={20} />
             </button>
           </div>
@@ -439,14 +466,16 @@ const AIAssistant = () => {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && sendMessage()}
                 placeholder="Pergunte sobre os lanches..."
+                aria-label="Pergunta para a Paty"
                 className="flex-1 bg-slate-100 border-none rounded-2xl px-4 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none"
               />
               <button
                 onClick={sendMessage}
+                title="Enviar Mensagem"
                 disabled={isLoading || !input.trim()}
-                className="p-2 bg-orange-600 text-white rounded-2xl disabled:opacity-50 hover:bg-orange-700 transition-colors"
+                className="w-10 h-10 bg-orange-600 text-white rounded-2xl flex items-center justify-center hover:bg-orange-700 transition-all disabled:opacity-50 disabled:bg-slate-200"
               >
-                <Send size={20} />
+                <Send size={18} />
               </button>
             </div>
           </div>
@@ -457,18 +486,46 @@ const AIAssistant = () => {
 };
 
 const AppInner = () => {
-  const { org, loading } = useTenant();
+  const { org, loading, isBlocked } = useTenant();
   const { user } = useAuth();
   const location = useLocation();
 
-  // Fix: route "/" must be public to allow menu browsing
+  const pathParts = location.pathname.split('/').filter(Boolean);
+  // A route is public if it's:
+  // - Root path
+  // - Platform-wide public routes
+  // - A store slug (/:slug) — the menu page
+  // - A store login/register (/:slug/login or /:slug/register)
+  const reservedKeywords = [
+    'admin', 'venda', 'login', 'register', 'assinar',
+    'rastreio', 'kitchen', 'delivery', 'finance', 'saas-admin', 'super-admin',
+    'profile', 'courier-dashboard', 'courier', 'loja'
+  ];
+  const isSlugRoute =
+    pathParts.length === 1 && !reservedKeywords.includes(pathParts[0]);
+  const isSlugLoginOrRegister =
+    pathParts.length === 2 &&
+    !reservedKeywords.includes(pathParts[0]) &&
+    (pathParts[1] === 'login' || pathParts[1] === 'register');
+
   const isPublicRoute =
     location.pathname === "/" ||
     location.pathname === "/login" ||
     location.pathname === "/register" ||
     location.pathname.startsWith("/venda") ||
     location.pathname === "/assinar" ||
-    location.pathname.startsWith("/rastreio");
+    location.pathname.startsWith("/rastreio") ||
+    isSlugRoute ||
+    isSlugLoginOrRegister;
+
+
+  const isPlatformRoute =
+    location.pathname.startsWith("/super-admin") ||
+    location.pathname.startsWith("/saas-admin") ||
+    location.pathname.startsWith("/venda") ||
+    location.pathname.startsWith("/assinar") ||
+    location.pathname === "/login" ||
+    location.pathname === "/register";
 
   if (loading) return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50">
@@ -500,34 +557,79 @@ const AppInner = () => {
     return <Navigate to="/" replace />;
   }
 
+  // Blocking logic for admin routes
+  const isBlockedRoute =
+    location.pathname.startsWith("/admin") ||
+    location.pathname.startsWith("/finance") ||
+    location.pathname.startsWith("/kitchen") ||
+    location.pathname.startsWith("/delivery") ||
+    location.pathname.startsWith("/courier-dashboard");
+
+  if (isBlocked && isBlockedRoute && user?.role !== 'super_admin') {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mb-6 shadow-xl"
+        >
+          <Lock size={40} className="text-red-600" />
+        </motion.div>
+        <h1 className="text-3xl font-black text-slate-900 mb-2 tracking-tight">Painel Administrativo Bloqueado</h1>
+        <p className="text-slate-600 max-w-md mb-8 leading-relaxed font-medium">
+          Identificamos uma pendência na sua mensalidade ou sua loja foi temporariamente suspensa por nossa equipe.
+          <br /><br />
+          <span className="text-sm border-l-4 border-orange-500 pl-3 block text-left bg-orange-50 py-2 rounded-r-xl">
+            Sua vitrine de vendas para clientes **continua funcionando normalmente**.
+          </span>
+        </p>
+        <div className="flex flex-col gap-3 w-full max-w-sm">
+          <button
+            onClick={() => window.open(`https://wa.me/5562999990001?text=Olá, preciso de ajuda com o pagamento da minha loja ${org?.name}`)}
+            className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-xl hover:bg-orange-700 transition-all flex items-center justify-center gap-2 transform hover:-translate-y-1"
+          >
+            <CreditCard size={20} />
+            Regularizar agora via Wattsapp
+          </button>
+          <button
+            onClick={() => window.location.href = '/'}
+            className="w-full py-4 bg-white text-slate-600 border-2 border-slate-200 rounded-2xl font-bold hover:bg-slate-50 transition-all"
+          >
+            Voltar para o Início
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn(
       "min-h-screen transition-all duration-700 bg-[#F8FAFC]",
-      (!isPublicRoute) ? "pb-20 md:pb-0 md:pl-20" : ""
+      (!isPublicRoute && !isPlatformRoute) ? "pb-20 md:pb-0 md:pl-20" : ""
     )}>
       <style>{`
         :root {
-          --primary: ${org?.branding.primaryColor || '#ea580c'};
-          --secondary: ${org?.branding.secondaryColor || '#fb923c'};
+          --primary: ${isPlatformRoute ? '#4f46e5' : (org?.branding.primaryColor || '#ea580c')};
+        --secondary: ${isPlatformRoute ? '#818cf8' : (org?.branding.secondaryColor || '#fb923c')};
         }
         .glass-morphism {
           background: rgba(255, 255, 255, 0.7);
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
         }
         .premium-card {
           background: white;
-          border: 1px solid rgba(255, 255, 255, 0.3);
-          box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
-          border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+        border-radius: 24px;
         }
         .text-gradient {
           background: linear-gradient(to right, var(--primary), var(--secondary));
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         }
       `}</style>
-      {(!isPublicRoute) && <Navbar />}
+      {(!isPublicRoute && !isPlatformRoute) && <Navbar />}
       <main className={cn(
         "animate-in fade-in slide-in-from-bottom-4 duration-1000",
         (isPublicRoute) ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
@@ -553,11 +655,13 @@ const AppInner = () => {
           <Route path="/venda" element={<SaaSLandingPage />} />
           <Route path="/venda/cadastro" element={<SaaSStoreRegister />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/:slug/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/:slug/register" element={<RegisterPage />} />
           <Route path="/assinar" element={<SubscribePage />} />
           <Route path="/rastreio/:courierId" element={<TrackingPage />} />
         </Routes>
-        <AIAssistant />
+        {!isPlatformRoute && <AIAssistant />}
       </main>
     </div>
   );
@@ -566,13 +670,30 @@ const AppInner = () => {
 const TenantProvider = ({ children }: { children: React.ReactNode }) => {
   const [org, setOrg] = useState<Organization | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isBlocked, setIsBlocked] = useState(false);
   const location = useLocation();
   const { user } = useAuth();
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
   useEffect(() => {
     const host = window.location.hostname;
     const pathname = location.pathname;
     const pathParts = pathname.split('/').filter(Boolean);
+
+    // Platform-wide routes that don't need tenant context
+    const isPlatformPath =
+      (pathParts[0] === 'super-admin' ||
+        pathParts[0] === 'saas-admin' ||
+        pathParts[0] === 'venda' ||
+        pathParts[0] === 'assinar' ||
+        pathParts[0] === 'login' ||
+        pathParts[0] === 'register') && pathParts.length === 1; // Only platform if NO slug prefix
+
+    if (isPlatformPath) {
+      setOrg(null);
+      setLoading(false);
+      return;
+    }
 
     // Reserved keywords that should not be treated as slugs
     const reservedKeywords = [
@@ -585,7 +706,12 @@ const TenantProvider = ({ children }: { children: React.ReactNode }) => {
     let orgId: string | null = null;
 
     // 1. Path slug (explicitly changing store)
+    // Se o primeiro path for reservado (venda, super-admin, etc) mas houver mais partes, 
+    // ou se o primeiro NÃO for reservado, tentamos tratar como slug.
     if (pathParts.length > 0 && !reservedKeywords.includes(pathParts[0])) {
+      slug = pathParts[0];
+    } else if (pathParts.length > 1 && reservedKeywords.includes(pathParts[1])) {
+      // Caso /paty-churrasco/login
       slug = pathParts[0];
     }
     // 2. Logged in user (stays in their assigned org even on /admin or /)
@@ -605,6 +731,23 @@ const TenantProvider = ({ children }: { children: React.ReactNode }) => {
         const data = await res.json();
         if (data && data.id) {
           setOrg(data);
+
+          // Lógica de bloqueio
+          const graceDate = data.next_billing_date || data.billing_due_date;
+          const status = data.subscription_status || data.status || 'active';
+          const exempt = data.is_exempt || data.billing_exempt || false;
+
+          let blocked = false;
+          if (!exempt) {
+            if (status === 'suspended' || status === 'past_due' || status === 'inactive') {
+              blocked = true;
+            } else if (graceDate) {
+              const d = new Date(graceDate);
+              d.setDate(d.getDate() + 3); // 3 dias de carência
+              if (new Date() > d) blocked = true;
+            }
+          }
+          setIsBlocked(blocked);
         }
       } catch (err) {
         console.warn("Could not load organization:", err);
@@ -663,7 +806,7 @@ const TenantProvider = ({ children }: { children: React.ReactNode }) => {
   }, [org]);
 
   return (
-    <TenantContext.Provider value={{ org, loading }}>
+    <TenantContext.Provider value={{ org, loading, isBlocked }}>
       {children}
     </TenantContext.Provider>
   );
@@ -920,6 +1063,10 @@ const SalesPage = () => {
   };
 
   const addToCart = (product: Product, selectedIngredients: string[], extras: ExtraIngredient[]) => {
+    if (!user) {
+      setNeedsLogin(true);
+      return;
+    }
     const ingredientsStr = product.ingredients || "";
     const allIngredients = ingredientsStr.split(',').map(i => i.trim()).filter(i => i !== "");
     const removedIngredients = allIngredients.filter(i => !selectedIngredients.includes(i));
@@ -1396,6 +1543,7 @@ const SalesPage = () => {
             <button
               disabled={isOrdering || cart.length === 0 || !isShopOpen}
               onClick={placeOrder}
+              title={user ? "Finalizar Pedido" : "Entrar e Pedir"}
               className="w-full bg-black text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
               {isOrdering ? "Processando..." : !isShopOpen ? "Loja Fechada" : user ? "Finalizar Pedido" : "Entrar e Pedir"}
@@ -1605,6 +1753,48 @@ const SalesPage = () => {
                     Fechar e aguardar confirmação automática
                   </button>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Login Prompt Modal */}
+      <AnimatePresence>
+        {needsLogin && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl p-6 text-center border-t-4 border-orange-500"
+            >
+              <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <UserPlus size={32} />
+              </div>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight mb-2">Quase lá!</h2>
+              <p className="text-slate-600 font-medium mb-6">
+                Para adicionar itens ao seu pedido, faça login ou cadastre-se grátis. É rapidinho!
+              </p>
+              <div className="flex flex-col gap-3">
+                <a
+                  href={`/${org?.slug || 'paty-churrasco'}/register`}
+                  className="w-full py-3.5 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-md transition-all active:scale-95"
+                >
+                  Criar Conta
+                </a>
+                <a
+                  href={`/${org?.slug || 'paty-churrasco'}/login`}
+                  className="w-full py-3.5 bg-orange-50 text-orange-600 rounded-2xl font-bold hover:bg-orange-100 transition-all active:scale-95"
+                >
+                  Entrar na minha conta
+                </a>
+                <button
+                  onClick={() => setNeedsLogin(false)}
+                  className="mt-2 w-full py-2 text-sm font-semibold text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  Continuar espiando
+                </button>
               </div>
             </motion.div>
           </div>
@@ -2103,8 +2293,9 @@ const DeliveryPage = () => {
                     }
                   }}
                   className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                  title="Concluir Entrega"
                 >
-                  <CheckCircle2 size={20} /> Concluir Entrega
+                  <CheckCircle2 size={20} aria-label="Ícone de círculo com check" /> Concluir Entrega
                 </button>
               )}
             </motion.div>
@@ -2114,34 +2305,45 @@ const DeliveryPage = () => {
 
       <AnimatePresence>
         {showDispatchModal && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="dispatch-modal-title">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl">
-              <h3 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2"><Truck className="text-orange-600" /> Despachar Pedido</h3>
+              <h3 id="dispatch-modal-title" className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2"><Truck className="text-orange-600" aria-label="Ícone de caminhão de entrega" /> Despachar Pedido</h3>
               <div className="space-y-6">
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Entregador</label>
+                  <label htmlFor="courier-select" className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Entregador</label>
                   <select
+                    id="courier-select"
                     value={selectedCourierId}
                     onChange={e => setSelectedCourierId(e.target.value)}
                     className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-bold"
+                    aria-label="Selecionar entregador"
                   >
                     <option value="">Escolha quem vai levar...</option>
                     {couriers.map(c => <option key={c.id} value={c.id}>{c.name} ({c.phone})</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Taxa de Entrega (Comissão R$)</label>
+                  <label htmlFor="delivery-fee-input" className="block text-xs font-bold text-gray-400 uppercase mb-2">Taxa de Entrega (Comissão R$)</label>
                   <input
+                    id="delivery-fee-input"
                     type="number"
                     step="0.10"
                     value={deliveryFee}
                     onChange={e => setDeliveryFee(e.target.value)}
                     className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-mono text-xl font-black"
+                    aria-label="Taxa de entrega"
                   />
                 </div>
                 <div className="flex gap-4 pt-4">
-                  <button onClick={() => setShowDispatchModal(null)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold">Cancelar</button>
-                  <button onClick={deployOrder} disabled={!selectedCourierId} className="flex-2 px-8 py-4 bg-orange-600 text-white rounded-2xl font-bold shadow-lg shadow-orange-100 disabled:opacity-50">Confirmar Envio</button>
+                  <button onClick={() => setShowDispatchModal(null)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold" title="Cancelar despacho">Cancelar</button>
+                  <button
+                    onClick={deployOrder}
+                    disabled={!selectedCourierId}
+                    className="flex-2 px-8 py-4 bg-orange-600 text-white rounded-2xl font-bold shadow-lg shadow-orange-100 disabled:opacity-50"
+                    title="Confirmar envio do pedido"
+                  >
+                    Confirmar Envio
+                  </button>
                 </div>
               </div>
             </motion.div>
@@ -2151,7 +2353,7 @@ const DeliveryPage = () => {
 
       <AnimatePresence>
         {showQrModal && (
-          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="qr-modal-title">
             <motion.div
               initial={{ opacity: 0, y: 100 }}
               animate={{ opacity: 1, y: 0 }}
@@ -2159,14 +2361,16 @@ const DeliveryPage = () => {
               className="bg-white w-full max-w-sm rounded-[2rem] p-6 shadow-2xl"
             >
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold flex items-center gap-2">
-                  <QrCode className="text-blue-600" /> Cobrar Pedido
+                <h3 id="qr-modal-title" className="text-xl font-bold flex items-center gap-2">
+                  <QrCode className="text-blue-600" aria-label="Ícone de QR Code" /> Cobrar Pedido
                 </h3>
                 <button
                   onClick={() => setShowQrModal(null)}
                   className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                  title="Fechar"
+                  aria-label="Fechar modal de cobrança"
                 >
-                  <X size={20} />
+                  <X size={20} aria-label="Ícone de fechar" />
                 </button>
               </div>
 
@@ -2178,7 +2382,7 @@ const DeliveryPage = () => {
                 <div className="mt-6 flex justify-center min-h-[220px]">
                   {pixLoading ? (
                     <div className="flex flex-col items-center justify-center space-y-4">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" role="status" aria-label="Carregando QR Code PIX"></div>
                       <p className="text-sm text-gray-500 font-medium">Gerando PIX...</p>
                     </div>
                   ) : pixData ? (
@@ -2186,11 +2390,11 @@ const DeliveryPage = () => {
                       {pixData.qr_code_base64 ? (
                         <img
                           src={`data:image/png;base64,${pixData.qr_code_base64}`}
-                          alt="QR Code PIX"
+                          alt="QR Code PIX para pagamento"
                           className="w-[180px] h-[180px]"
                         />
                       ) : (
-                        <QrCode size={180} className="text-gray-800" />
+                        <QrCode size={180} className="text-gray-800" aria-label="Ícone de QR Code" />
                       )}
                     </div>
                   ) : (
@@ -2210,12 +2414,14 @@ const DeliveryPage = () => {
                 <button
                   onClick={() => confirmPaymentAndDeliver(showQrModal)}
                   className="w-full bg-orange-100 text-orange-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-orange-200 transition"
+                  title="Forçar recebimento (Dinheiro/Cartão)"
                 >
-                  <CheckCircle2 size={18} /> Forçar Recebimento (Dinheiro/Cartão)
+                  <CheckCircle2 size={18} aria-label="Ícone de círculo com check" /> Forçar Recebimento (Dinheiro/Cartão)
                 </button>
                 <button
                   onClick={() => setShowQrModal(null)}
                   className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2 hover:bg-gray-200 transition"
+                  title="Voltar"
                 >
                   Voltar
                 </button>
@@ -2366,7 +2572,7 @@ const FinancePage = () => {
       <header className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-4xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-            <DollarSign size={36} className="text-green-600" />
+            <DollarSign size={36} className="text-green-600" aria-label="Ícone de cifrão" />
             Financeiro
           </h1>
           <p className="text-gray-500 mt-1">Faturamento e relatórios da loja</p>
@@ -2375,8 +2581,9 @@ const FinancePage = () => {
           <button
             onClick={() => setIsAddingExpense(true)}
             className="px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-red-100 transition-all border border-red-100"
+            title="Adicionar nova despesa"
           >
-            <Plus size={16} /> Nova Despesa
+            <Plus size={16} aria-label="Ícone de mais" /> Nova Despesa
           </button>
           {(['today', 'week', 'month', 'all'] as const).map(p => (
             <button
@@ -2386,6 +2593,8 @@ const FinancePage = () => {
                 "px-4 py-2 rounded-xl text-sm font-bold transition-all",
                 period === p ? "bg-green-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
               )}
+              aria-pressed={period === p ? "true" : "false"}
+              title={`Ver dados de ${periodLabels[p]}`}
             >
               {periodLabels[p]}
             </button>
@@ -2397,7 +2606,7 @@ const FinancePage = () => {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
           <div className="w-10 h-10 bg-green-100 rounded-2xl flex items-center justify-center mb-3">
-            <TrendingUp size={20} className="text-green-600" />
+            <TrendingUp size={20} className="text-green-600" aria-label="Ícone de tendência de alta" />
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase">Faturamento</p>
           <p className="text-2xl font-black text-green-600 mt-1">{formatCurrency(totalRevenue)}</p>
@@ -2405,7 +2614,7 @@ const FinancePage = () => {
         </div>
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
           <div className="w-10 h-10 bg-blue-100 rounded-2xl flex items-center justify-center mb-3">
-            <ShoppingBag size={20} className="text-blue-600" />
+            <ShoppingBag size={20} className="text-blue-600" aria-label="Ícone de sacola de compras" />
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase">Total Pedidos</p>
           <p className="text-2xl font-black text-blue-600 mt-1">{filtered.length}</p>
@@ -2413,7 +2622,7 @@ const FinancePage = () => {
         </div>
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
           <div className="w-10 h-10 bg-purple-100 rounded-2xl flex items-center justify-center mb-3">
-            <BarChart3 size={20} className="text-purple-600" />
+            <BarChart3 size={20} className="text-purple-600" aria-label="Ícone de gráfico de barras" />
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase">Ticket Médio</p>
           <p className="text-2xl font-black text-purple-600 mt-1">{formatCurrency(avgTicket)}</p>
@@ -2421,7 +2630,7 @@ const FinancePage = () => {
         </div>
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
           <div className="w-10 h-10 bg-red-100 rounded-2xl flex items-center justify-center mb-3">
-            <TrendingDown size={20} className="text-red-600" />
+            <TrendingDown size={20} className="text-red-600" aria-label="Ícone de tendência de baixa" />
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase">Despesas</p>
           <p className="text-2xl font-black text-red-600 mt-1">{formatCurrency(totalExpenses)}</p>
@@ -2429,7 +2638,7 @@ const FinancePage = () => {
         </div>
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
           <div className="w-10 h-10 bg-indigo-100 rounded-2xl flex items-center justify-center mb-3">
-            <Activity size={20} className="text-indigo-600" />
+            <Activity size={20} className="text-indigo-600" aria-label="Ícone de atividade" />
           </div>
           <p className="text-xs font-bold text-gray-400 uppercase">Lucro Líquido</p>
           <p className="text-2xl font-black text-indigo-600 mt-1">{formatCurrency(netProfit)}</p>
@@ -2440,7 +2649,7 @@ const FinancePage = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
           <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
-            <TrendingUp size={18} className="text-green-500" />
+            <TrendingUp size={18} className="text-green-500" aria-label="Ícone de tendência de alta" />
             Vendas — 7 dias
           </h3>
           <div className="flex items-end gap-3 h-32">
@@ -2450,6 +2659,7 @@ const FinancePage = () => {
                 <div
                   className="w-full rounded-t-lg bg-gradient-to-t from-green-500 to-green-300 transition-all duration-500"
                   style={{ height: `${Math.max((day.total / maxDay) * 96, day.total > 0 ? 8 : 2)}px` }}
+                  aria-label={`Total de vendas de ${day.label}: ${formatCurrency(day.total)}`}
                 />
                 <span className="text-[10px] text-gray-400 text-center leading-tight">{day.label}</span>
               </div>
@@ -2459,7 +2669,7 @@ const FinancePage = () => {
 
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden">
           <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2">
-            <TrendingDown size={18} className="text-red-500" />
+            <TrendingDown size={18} className="text-red-500" aria-label="Ícone de tendência de baixa" />
             Últimas Despesas
           </h3>
           <div className="space-y-3 max-h-[128px] overflow-y-auto">
@@ -2471,7 +2681,7 @@ const FinancePage = () => {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="font-mono font-bold text-red-500">-{formatCurrency(Number(exp.amount))}</span>
-                  <button onClick={() => deleteExpense(exp.id)} className="text-gray-300 hover:text-red-500"><X size={14} /></button>
+                  <button onClick={() => deleteExpense(exp.id)} className="text-gray-300 hover:text-red-500" title={`Excluir despesa: ${exp.description}`}><X size={14} aria-label="Ícone de fechar" /></button>
                 </div>
               </div>
             ))}
@@ -2487,7 +2697,7 @@ const FinancePage = () => {
           <span className="text-sm text-gray-400">{filtered.length} pedidos</span>
         </div>
         {loading ? (
-          <div className="py-16 text-center text-gray-400">Carregando...</div>
+          <div className="py-16 text-center text-gray-400" role="status" aria-live="polite">Carregando...</div>
         ) : filtered.length === 0 ? (
           <div className="py-16 text-center text-gray-400">Nenhum pedido neste período</div>
         ) : (
@@ -2535,31 +2745,34 @@ const FinancePage = () => {
       </div>
       <AnimatePresence>
         {isAddingExpense && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="expense-modal-title">
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl"
             >
-              <h3 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2">
-                <TrendingDown className="text-red-600" /> Registrar Despesa
+              <h3 id="expense-modal-title" className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2">
+                <TrendingDown className="text-red-600" aria-label="Ícone de tendência de baixa" /> Registrar Despesa
               </h3>
               <form onSubmit={saveExpense} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
+                  <label htmlFor="expense-description" className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
                   <input
+                    id="expense-description"
                     required
                     value={expDesc}
                     onChange={e => setExpDesc(e.target.value)}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
                     placeholder="Ex: Compra de carne, Aluguel"
+                    aria-label="Descrição da despesa"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Valor (R$)</label>
+                    <label htmlFor="expense-amount" className="block text-xs font-bold text-gray-400 uppercase mb-1">Valor (R$)</label>
                     <input
+                      id="expense-amount"
                       required
                       type="number"
                       step="0.01"
@@ -2567,14 +2780,17 @@ const FinancePage = () => {
                       onChange={e => setExpAmount(e.target.value)}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
                       placeholder="0.00"
+                      aria-label="Valor da despesa"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Categoria</label>
+                    <label htmlFor="expense-category" className="block text-xs font-bold text-gray-400 uppercase mb-1">Categoria</label>
                     <select
+                      id="expense-category"
                       value={expCategory}
                       onChange={e => setExpCategory(e.target.value)}
                       className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-red-500 font-bold"
+                      aria-label="Categoria da despesa"
                     >
                       <option>Insumos</option>
                       <option>Manutenção</option>
@@ -2589,11 +2805,13 @@ const FinancePage = () => {
                     type="button"
                     onClick={() => setIsAddingExpense(false)}
                     className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-bold"
+                    title="Cancelar"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
+                    title="Salvar Gasto"
                     className="flex-2 px-8 py-4 bg-red-600 text-white rounded-2xl font-bold shadow-lg shadow-red-100"
                   >
                     Salvar Gasto
@@ -2623,7 +2841,8 @@ const AdminPage = () => {
   const [extraName, setExtraName] = useState("");
   const [extraPrice, setExtraPrice] = useState("");
 
-  const [activeTab, setActiveTab] = useState<'products' | 'couriers' | 'settings' | 'metrics'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'couriers' | 'settings' | 'metrics' | 'clients'>('products');
+  const [clients, setClients] = useState<{ nome: string; telefone: string; total_pedidos: number; total_gasto: number; ultimo_pedido: string }[]>([]);
   const [couriers, setCouriers] = useState<User[]>([]);
   const [courierStats, setCourierStats] = useState<Record<string, { total_commissions: number, total_advances: number, net_pay: number }>>({});
   const [newCourierName, setNewCourierName] = useState("");
@@ -2638,7 +2857,32 @@ const AdminPage = () => {
   const [hoursSaving, setHoursSaving] = useState(false);
 
   const { org } = useTenant();
+  const { user } = useAuth();
   const { notify } = useNotification();
+
+  const fetchClients = async () => {
+    if (!org) return;
+    try {
+      const res = await fetch(`/api/saas/clients?orgId=${org.id}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('sb-access-token')}`,
+          'x-admin-id': user?.id ? String(user.id) : ''
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setClients(data);
+      }
+    } catch (e) {
+      console.error("Erro ao buscar clientes:", e);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'clients') {
+      fetchClients();
+    }
+  }, [activeTab, org]);
 
   const fetchCourierStats = async (courierList: User[]) => {
     const stats: Record<string, { total_commissions: number, total_advances: number, net_pay: number }> = {};
@@ -2813,6 +3057,7 @@ const AdminPage = () => {
   const [logoPreview, setLogoPreview] = useState(org?.branding?.logoUrl || "");
   const [logoSaving, setLogoSaving] = useState(false);
   const [logoSaved, setLogoSaved] = useState(false);
+
 
   // Promotions
   const [editingPromo, setEditingPromo] = useState<number | null>(null);
@@ -2993,7 +3238,7 @@ const AdminPage = () => {
     <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-5xl mx-auto">
       <header className="mb-8">
         <h1 className="text-4xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-          <Settings size={36} className="text-gray-700" />
+          <Settings size={36} className="text-gray-700" aria-label="Ícone de configurações" />
           Administração - {org?.name || "Carregando..."}
         </h1>
         <p className="text-gray-500 mt-2">Gerencie o cardápio e configurações da loja {org?.name}</p>
@@ -3006,6 +3251,8 @@ const AdminPage = () => {
             "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
             activeTab === 'products' ? "bg-black text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
           )}
+          aria-pressed={activeTab === 'products'}
+          title="Gerenciar Cardápio e Produtos"
         >
           Cardápio e Produtos
         </button>
@@ -3015,8 +3262,21 @@ const AdminPage = () => {
             "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
             activeTab === 'couriers' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
           )}
+          aria-pressed={activeTab === 'couriers'}
+          title="Gerenciar Entregadores"
         >
           Entregadores
+        </button>
+        <button
+          onClick={() => setActiveTab('clients')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'clients' ? "bg-blue-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+          aria-pressed={activeTab === 'clients'}
+          title="Gerenciar Clientes"
+        >
+          Clientes
         </button>
         <button
           onClick={() => setActiveTab('settings')}
@@ -3024,6 +3284,8 @@ const AdminPage = () => {
             "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
             activeTab === 'settings' ? "bg-gray-800 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
           )}
+          aria-pressed={activeTab === 'settings'}
+          title="Configurações gerais (Mercado Pago, Logo)"
         >
           Configurações (MP/Logo)
         </button>
@@ -3033,6 +3295,8 @@ const AdminPage = () => {
             "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
             activeTab === 'metrics' ? "bg-blue-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
           )}
+          aria-pressed={activeTab === 'metrics'}
+          title="Ver métricas da loja"
         >
           📊 Métricas
         </button>
@@ -3049,8 +3313,8 @@ const AdminPage = () => {
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-bold">{editingProduct ? 'Editar Produto' : 'Novo Produto'}</h2>
                 {editingProduct && (
-                  <button type="button" onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors">
-                    <X size={14} /> Cancelar
+                  <button type="button" onClick={cancelEdit} className="text-xs text-gray-400 hover:text-gray-700 flex items-center gap-1 transition-colors" title="Cancelar edição">
+                    <X size={14} aria-label="Ícone de fechar" /> Cancelar
                   </button>
                 )}
               </div>
@@ -3064,6 +3328,8 @@ const AdminPage = () => {
                       "py-2 rounded-xl text-xs font-bold border transition-all",
                       category === 'churrasco' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
                     )}
+                    aria-pressed={category === 'churrasco'}
+                    title="Definir como produto de churrasco"
                   >
                     Churrasco
                   </button>
@@ -3074,34 +3340,41 @@ const AdminPage = () => {
                       "py-2 rounded-xl text-xs font-bold border transition-all",
                       category === 'ready' ? "bg-orange-600 border-orange-600 text-white" : "bg-gray-50 border-gray-200 text-gray-500"
                     )}
+                    aria-pressed={category === 'ready'}
+                    title="Definir como produto pronto (bebida/outro)"
                   >
                     Pronto (Bebida/Outro)
                   </button>
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome</label>
+                <label htmlFor="product-name" className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome</label>
                 <input
+                  id="product-name"
                   required
                   type="text"
                   value={name}
                   onChange={e => setName(e.target.value)}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                   placeholder="Ex: Churrasco Grego Tradicional"
+                  aria-label="Nome do produto"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
+                <label htmlFor="product-description" className="block text-xs font-bold text-gray-400 uppercase mb-1">Descrição</label>
                 <textarea
+                  id="product-description"
                   value={description}
                   onChange={e => setDescription(e.target.value)}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none h-24"
                   placeholder="Descreva o produto..."
+                  aria-label="Descrição do produto"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
+                <label htmlFor="product-price" className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
                 <input
+                  id="product-price"
                   required
                   type="number"
                   step="0.01"
@@ -3109,21 +3382,25 @@ const AdminPage = () => {
                   onChange={e => setPrice(e.target.value)}
                   className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                   placeholder="0.00"
+                  aria-label="Preço do produto"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Imagem do Produto</label>
+                <label htmlFor="product-image-url" className="block text-xs font-bold text-gray-400 uppercase mb-1">Imagem do Produto</label>
                 <div className="space-y-3">
                   <div className="flex gap-2 items-center overflow-hidden">
                     <input
+                      id="product-image-url"
                       type="text"
                       value={imageUrl}
                       onChange={e => setImageUrl(e.target.value)}
                       className="min-w-0 flex-1 px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none text-sm"
                       placeholder="Cole uma URL ou envie um arquivo"
+                      aria-label="URL da imagem do produto"
                     />
-                    <label className="shrink-0 cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
+                    <label htmlFor="image-upload" className="shrink-0 cursor-pointer bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-2 rounded-xl transition-colors flex items-center justify-center">
                       <input
+                        id="image-upload"
                         type="file"
                         accept="image/*"
                         className="hidden"
@@ -3137,6 +3414,7 @@ const AdminPage = () => {
                             reader.readAsDataURL(file);
                           }
                         }}
+                        aria-label="Upload de imagem do produto"
                       />
                       <span className="text-xs font-bold uppercase">Upload</span>
                     </label>
@@ -3145,7 +3423,7 @@ const AdminPage = () => {
                     <div className="relative w-full h-32 bg-gray-50 rounded-xl overflow-hidden border border-gray-200">
                       <img
                         src={imageUrl}
-                        alt="Preview"
+                        alt={`Preview da imagem de ${name}`}
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
@@ -3153,8 +3431,10 @@ const AdminPage = () => {
                         type="button"
                         onClick={() => setImageUrl("")}
                         className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1 rounded-full backdrop-blur-sm transition-colors"
+                        title="Remover imagem"
+                        aria-label="Remover imagem do produto"
                       >
-                        <X size={14} />
+                        <X size={14} aria-label="Ícone de fechar" />
                       </button>
                     </div>
                   )}
@@ -3162,13 +3442,15 @@ const AdminPage = () => {
               </div>
               {category === 'churrasco' && (
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Ingredientes</label>
+                  <label htmlFor="product-ingredients" className="block text-xs font-bold text-gray-400 uppercase mb-1">Ingredientes</label>
                   <input
+                    id="product-ingredients"
                     type="text"
                     value={ingredients}
                     onChange={e => setIngredients(e.target.value)}
                     className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                     placeholder="Ex: Carne, Pão, Molho, Salada"
+                    aria-label="Ingredientes do produto"
                   />
                 </div>
               )}
@@ -3179,6 +3461,7 @@ const AdminPage = () => {
                   checked={available}
                   onChange={(e) => setAvailable(e.target.checked)}
                   className="w-5 h-5 text-orange-600 rounded border-gray-300 focus:ring-orange-500 outline-none cursor-pointer"
+                  aria-label="Disponibilidade do produto"
                 />
                 <label htmlFor="product-available" className="text-sm font-bold text-gray-700 cursor-pointer select-none">
                   Produto Disponível para Venda
@@ -3189,12 +3472,15 @@ const AdminPage = () => {
                 editingProduct
                   ? "bg-orange-600 text-white hover:bg-orange-700"
                   : "bg-black text-white hover:bg-gray-800"
-              )}>
+              )}
+                type="submit"
+                title={editingProduct ? 'Salvar alterações do produto' : 'Salvar novo produto'}
+              >
                 {editingProduct ? 'Salvar Alterações' : 'Salvar Produto'}
               </button>
               {editingProduct && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
-                  <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2" role="alert">
+                  <AlertCircle size={14} className="text-amber-600 shrink-0" aria-label="Ícone de alerta" />
                   <p className="text-xs text-amber-700">Editando: <strong>{editingProduct.name}</strong></p>
                 </div>
               )}
@@ -3249,16 +3535,18 @@ const AdminPage = () => {
                           <button
                             onClick={() => startEditProduct(product)}
                             className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
-                            title="Editar"
+                            title="Editar produto"
+                            aria-label={`Editar ${product.name}`}
                           >
-                            <Pencil size={18} />
+                            <Pencil size={18} aria-label="Ícone de lápis" />
                           </button>
                           <button
                             onClick={() => deleteProduct(product.id)}
                             className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                            title="Excluir"
+                            title="Excluir produto"
+                            aria-label={`Excluir ${product.name}`}
                           >
-                            <Trash2 size={18} />
+                            <Trash2 size={18} aria-label="Ícone de lixeira" />
                           </button>
                         </div>
                       </td>
@@ -3275,19 +3563,22 @@ const AdminPage = () => {
               <div className="p-6 bg-gray-50 border-b border-gray-100">
                 <form onSubmit={saveExtraIngredient} className="flex flex-wrap gap-4 items-end">
                   <div className="flex-1 min-w-0">
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome do Adicional</label>
+                    <label htmlFor="extra-name" className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome do Adicional</label>
                     <input
+                      id="extra-name"
                       required
                       type="text"
                       value={extraName}
                       onChange={e => setExtraName(e.target.value)}
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                       placeholder="Ex: Bacon, Queijo Extra"
+                      aria-label="Nome do ingrediente adicional"
                     />
                   </div>
                   <div className="w-32">
-                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
+                    <label htmlFor="extra-price" className="block text-xs font-bold text-gray-400 uppercase mb-1">Preço (R$)</label>
                     <input
+                      id="extra-price"
                       required
                       type="number"
                       step="0.01"
@@ -3295,18 +3586,21 @@ const AdminPage = () => {
                       onChange={e => setExtraPrice(e.target.value)}
                       className="w-full px-4 py-2 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
                       placeholder="0.00"
+                      aria-label="Preço do ingrediente adicional"
                     />
                   </div>
                   <div className="flex gap-2">
                     <button type="submit" className={cn(
                       "px-6 py-2 h-[42px] rounded-xl font-bold transition-colors",
                       editingExtra ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-orange-600 text-white hover:bg-orange-700"
-                    )}>
+                    )}
+                      title={editingExtra ? 'Salvar alterações do adicional' : 'Adicionar novo adicional'}
+                    >
                       {editingExtra ? 'Salvar' : 'Adicionar'}
                     </button>
                     {editingExtra && (
-                      <button type="button" onClick={cancelEditExtra} className="px-4 py-2 h-[42px] rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors">
-                        <X size={18} />
+                      <button type="button" onClick={cancelEditExtra} className="px-4 py-2 h-[42px] rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-colors" title="Cancelar edição do adicional">
+                        <X size={18} aria-label="Ícone de fechar" />
                       </button>
                     )}
                   </div>
@@ -3335,16 +3629,18 @@ const AdminPage = () => {
                             <button
                               onClick={() => startEditExtra(extra)}
                               className="text-blue-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50 transition-colors"
-                              title="Editar"
+                              title="Editar adicional"
+                              aria-label={`Editar ${extra.name}`}
                             >
-                              <Pencil size={18} />
+                              <Pencil size={18} aria-label="Ícone de lápis" />
                             </button>
                             <button
                               onClick={() => deleteExtraIngredient(extra.id)}
                               className="text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                              title="Excluir"
+                              title="Excluir adicional"
+                              aria-label={`Excluir adicional ${extra.name}`}
                             >
-                              <Trash2 size={18} />
+                              <Trash2 size={18} aria-label="Ícone de lixeira" />
                             </button>
                           </div>
                         </td>
@@ -3365,22 +3661,22 @@ const AdminPage = () => {
               <form onSubmit={saveCourier} className="bg-white p-6 rounded-3xl border border-gray-200 shadow-lg space-y-4 sticky top-8">
                 <h2 className="text-xl font-bold">Novo Entregador</h2>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
-                  <input required autoComplete="new-password" value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                  <label htmlFor="courier-name" className="block text-xs font-bold text-gray-400 uppercase mb-1">Nome Completo</label>
+                  <input id="courier-name" required autoComplete="new-password" value={newCourierName} onChange={e => setNewCourierName(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Nome do entregador" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
-                  <input required autoComplete="new-password" value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
+                  <label htmlFor="courier-phone" className="block text-xs font-bold text-gray-400 uppercase mb-1">Telefone (Login)</label>
+                  <input id="courier-phone" required autoComplete="new-password" value={newCourierPhone} onChange={e => setNewCourierPhone(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="55779..." />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
-                  <input required type="password" autoComplete="new-password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" />
+                  <label htmlFor="courier-password" className="block text-xs font-bold text-gray-400 uppercase mb-1">Senha</label>
+                  <input id="courier-password" required type="password" autoComplete="new-password" value={newCourierPassword} onChange={e => setNewCourierPassword(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Senha de acesso" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
-                  <input required type="number" step="0.01" min="0" max="100" value={newCourierCommission} onChange={e => setNewCourierCommission(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ex: 15" />
+                  <label htmlFor="courier-commission" className="block text-xs font-bold text-gray-400 uppercase mb-1">Taxa de Comissão (%)</label>
+                  <input id="courier-commission" required type="number" step="0.01" min="0" max="100" value={newCourierCommission} onChange={e => setNewCourierCommission(e.target.value)} className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl outline-none" placeholder="Ex: 15" />
                 </div>
-                <button type="submit" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
+                <button type="submit" title="Cadastrar novo entregador" className="w-full py-3 bg-orange-600 text-white rounded-2xl font-bold hover:bg-orange-700 shadow-lg">Cadastrar Entregador</button>
               </form>
             </div>
             <div className="lg:col-span-2">
@@ -3401,6 +3697,20 @@ const AdminPage = () => {
                                 setEditCommissionValue(String(c.commission_rate || 0));
                                 setModalType('edit_commission');
                               }} className="text-[10px] text-blue-500 hover:text-blue-700 underline cursor-pointer">Editar</button>
+                            </div>
+                          </td>
+                          <td className="p-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] text-gray-400 font-bold uppercase">Métricas do Mês</span>
+                              <div className="flex flex-wrap gap-1 mt-1 mb-2">
+                                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded-md tracking-tight">📦 {courierStats[c.id]?.monthly_deliveries || 0}</span>
+                                <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded-md tracking-tight">⏱️ {courierStats[c.id]?.avg_monthly_time_mins || 0} min</span>
+                              </div>
+                              <span className="text-[10px] text-gray-400 font-bold uppercase">Geral (Histórico)</span>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md tracking-tight">Total: {courierStats[c.id]?.total_lifetime_deliveries || 0}</span>
+                                <span className="text-[10px] font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-md tracking-tight">Méd: {courierStats[c.id]?.avg_lifetime_time_mins || 0}m</span>
+                              </div>
                             </div>
                           </td>
                           <td className="p-4">
@@ -3446,11 +3756,59 @@ const AdminPage = () => {
                           </td>
                         </tr>
                       ))}
-                      {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400" colSpan={5}>Nenhum entregador cadastrado.</td></tr>}
+                      {couriers.length === 0 && <tr><td className="p-8 text-center text-gray-400" colSpan={6}>Nenhum entregador cadastrado.</td></tr>}
                     </tbody>
                   </table>
                 </div>
               </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'clients' && (
+          <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+            <div className="p-4 font-bold border-b bg-gray-50/50 font-black uppercase text-xs tracking-widest text-gray-400 flex items-center gap-2">
+              <User size={18} className="text-blue-500" /> Visão de Clientes
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm min-w-[750px] whitespace-nowrap">
+                <thead className="bg-gray-50 text-gray-500 uppercase text-[10px] font-black tracking-widest">
+                  <tr>
+                    <th className="p-4">Cliente</th>
+                    <th className="p-4 text-center">Nº de Pedidos</th>
+                    <th className="p-4 text-right">Total Gasto</th>
+                    <th className="p-4 text-right">Último Pedido</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {clients.map(c => (
+                    <tr key={c.telefone} className="hover:bg-blue-50/30 transition-colors">
+                      <td className="p-4">
+                        <p className="font-black text-gray-800 text-base">{c.nome || "Não informado"}</p>
+                        <p className="text-xs text-blue-600 font-mono tracking-tighter font-bold bg-blue-50 inline-block px-2 py-1 rounded-md mt-1">{c.telefone}</p>
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="bg-orange-100 text-orange-700 font-black px-3 py-1.5 rounded-xl text-lg shadow-sm">{c.total_pedidos}</span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-xl font-black text-emerald-600 gap-1 flex justify-end"><span className="text-xs text-emerald-400 self-center">R$</span> {c.total_gasto.toFixed(2)}</span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-xs font-bold text-gray-500">{new Date(c.ultimo_pedido).toLocaleString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      </td>
+                    </tr>
+                  ))}
+                  {clients.length === 0 && (
+                    <tr>
+                      <td className="p-12 text-center text-gray-400 font-bold" colSpan={4}>
+                        Nenhum cliente cadastrado ou com pedido finalizado.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )
@@ -4375,6 +4733,7 @@ const LoginPage = () => {
 
 const RegisterPage = () => {
   const { login } = useAuth();
+  const { org } = useTenant();
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -4390,7 +4749,12 @@ const RegisterPage = () => {
       const res = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, phone, password })
+        body: JSON.stringify({
+          name,
+          phone,
+          password,
+          org_id: org?.id // Vincula o cliente à loja atual
+        })
       });
       const data = await res.json();
       if (res.ok) {
@@ -5963,6 +6327,8 @@ const ProfilePage = () => {
                   </div>
                   <button
                     onClick={() => setShowHistory(false)}
+                    title="Fechar Histórico"
+                    aria-label="Fechar Histórico de Pedidos"
                     className="p-2 hover:bg-gray-100 rounded-full transition-colors"
                   >
                     <X size={24} />
@@ -6029,6 +6395,7 @@ const ProfilePage = () => {
 // ============================================================
 const SuperAdminPage = () => {
   const { notify } = useNotification();
+  const { user } = useAuth();
   const [metrics, setMetrics] = useState<{ totalRevenue: number; totalOrders: number; totalOrgs: number } | null>(null);
   const [orgs, setOrgs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -6044,9 +6411,15 @@ const SuperAdminPage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        ...(session ? { "Authorization": `Bearer ${session.access_token}` } : {}),
+        ...(user?.id ? { "x-super-admin-id": String(user.id) } : {})
+      };
+
       const [metricsRes, orgsRes] = await Promise.all([
-        fetch('/api/admin/global-metrics'),
-        fetch('/api/organizations')
+        fetch('/api/admin/global-metrics', { headers }),
+        fetch('/api/organizations', { headers })
       ]);
       const metricsData = await metricsRes.json();
       const orgsData = await orgsRes.json();
@@ -6061,7 +6434,12 @@ const SuperAdminPage = () => {
 
   const fetchFinancial = async () => {
     try {
-      const res = await fetch('/api/saas-payments/summary');
+      const { data: { session } } = await supabase.auth.getSession();
+      const headers = {
+        ...(session ? { "Authorization": `Bearer ${session.access_token}` } : {}),
+        ...(user?.id ? { "x-super-admin-id": String(user.id) } : {})
+      };
+      const res = await fetch('/api/saas-payments/summary', { headers });
       const data = await res.json();
       setFinancial(data);
     } catch { /* silent */ }
@@ -6076,9 +6454,14 @@ const SuperAdminPage = () => {
     if (!newOrg.name || !newOrg.slug) return notify('Nome e Slug são obrigatórios', 'error');
     setSaving(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/organizations', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+          ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+        },
         body: JSON.stringify({
           name: newOrg.name,
           slug: newOrg.slug,
@@ -6101,16 +6484,48 @@ const SuperAdminPage = () => {
 
   const handleSetCustomDomain = async (orgId: string, domain: string) => {
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`/api/organizations/${orgId}/custom-domain`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+          ...(user?.id ? { "x-super-admin-id": String(user.id) } : {})
+        },
         body: JSON.stringify({ custom_domain: domain })
       });
       if (res.ok) {
-        notify('Domínio atualizado!', 'success');
+        notify('Domínio atualizado! Verifique o apontamento DNS.', 'success');
         fetchData();
       } else {
         notify('Erro ao atualizar domínio', 'error');
+      }
+    } catch {
+      notify('Erro de conexão', 'error');
+    }
+  };
+
+  const handleVerifyDomain = async (orgId: string) => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`/api/organizations/${orgId}/verify-domain`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+          ...(user?.id ? { "x-super-admin-id": String(user.id) } : {})
+        }
+      });
+      const result = await res.json();
+      if (res.ok) {
+        if (result.verified) {
+          notify('Domínio verificado com sucesso! ✅', 'success');
+        } else {
+          notify('Falha na verificação. Confira o CNAME.', 'error');
+        }
+        fetchData();
+      } else {
+        notify(result.error || 'Erro ao verificar domínio', 'error');
       }
     } catch {
       notify('Erro de conexão', 'error');
@@ -6151,9 +6566,10 @@ const SuperAdminPage = () => {
           </div>
           <button
             onClick={fetchData}
+            title="Atualizar Dados"
             className="p-2 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
           >
-            <Activity size={18} className="text-slate-500" />
+            <Activity size={18} className="text-slate-50" />
           </button>
         </div>
       </div>
@@ -6166,12 +6582,14 @@ const SuperAdminPage = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
+              title={`Aba ${tab.label}`}
+              aria-label={`Mudar para aba ${tab.label}`}
               className={cn(
                 "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
                 activeTab === tab.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
               )}
             >
-              <Icon size={16} />
+              <Icon size={16} aria-hidden="true" />
               {tab.label}
             </button>
           );
@@ -6266,7 +6684,14 @@ const SuperAdminPage = () => {
             <div className="flex gap-2">
               <button
                 onClick={async () => {
-                  const res = await fetch('/api/admin/run-billing-check', { method: 'POST' });
+                  const { data: { session } } = await supabase.auth.getSession();
+                  const res = await fetch('/api/admin/run-billing-check', {
+                    method: 'POST',
+                    headers: {
+                      ...(session ? { "Authorization": `Bearer ${session.access_token}` } : {}),
+                      ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                    }
+                  });
                   const data = await res.json();
                   notify(`Verificação concluída: ${data.suspended} lojas suspensas por inadimplência`, data.suspended > 0 ? 'error' : 'success');
                   fetchData();
@@ -6311,6 +6736,9 @@ const SuperAdminPage = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="font-black text-slate-900 text-lg">{org.name}</h3>
+                        <span className="bg-slate-800 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase shadow-sm">
+                          {org.plan || 'Básico'}
+                        </span>
                         <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full uppercase", statusColors[orgStatus as keyof typeof statusColors])}>
                           {statusLabels[orgStatus as keyof typeof statusLabels]}
                         </span>
@@ -6320,10 +6748,84 @@ const SuperAdminPage = () => {
                       </div>
                       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 font-medium">
                         <span>🔗 /{org.slug}</span>
-                        {org.custom_domain && <span>🌐 {org.custom_domain}</span>}
+                        {org.custom_domain && (
+                          <span className="flex items-center gap-1">
+                            🌐 {org.custom_domain}
+                            {org.custom_domain_status === 'active' ? (
+                              <span className="text-emerald-500" title="Verificado">✅</span>
+                            ) : org.custom_domain_status === 'failed' ? (
+                              <span className="text-red-500" title="Falha">❌</span>
+                            ) : (
+                              <span className="text-orange-500" title="Pendente">⏳</span>
+                            )}
+                          </span>
+                        )}
                         {org.billing_due_date && <span>📅 Vence: {new Date(org.billing_due_date).toLocaleDateString('pt-BR')}</span>}
                         {org.has_mp_token ? <span className="text-green-600">✅ MP</span> : <span className="text-red-400">⚠️ Sem MP</span>}
                       </div>
+
+                      {/* Store Metrics Mini-Dashboard */}
+                      {org.metrics && (
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          <div className="bg-white border border-slate-100 rounded-lg p-2.5 flex items-center gap-3 shadow-sm">
+                            <div className="bg-blue-50 p-2 rounded-lg text-blue-600"><Users size={16} /></div>
+                            <div>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase leading-tight tracking-wider">Clientes</p>
+                              <p className="text-sm font-black text-slate-900">{org.metrics.total_clients}</p>
+                            </div>
+                          </div>
+                          <div className="bg-white border border-slate-100 rounded-lg p-2.5 flex items-center gap-3 shadow-sm">
+                            <div className="bg-emerald-50 p-2 rounded-lg text-emerald-600"><DollarSign size={16} /></div>
+                            <div>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase leading-tight tracking-wider">Faturamento</p>
+                              <p className="text-sm font-black text-slate-900">R$ {(org.metrics.total_revenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                            </div>
+                          </div>
+                          <div className="bg-white border border-slate-100 rounded-lg p-2.5 flex items-center gap-3 shadow-sm">
+                            <div className="bg-purple-50 p-2 rounded-lg text-purple-600"><ShoppingBag size={16} /></div>
+                            <div>
+                              <p className="text-[10px] text-slate-400 font-bold uppercase leading-tight tracking-wider">Pedidos / Mês</p>
+                              <p className="text-sm font-black text-slate-900">{org.metrics.monthly_orders}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Domain Config Area */}
+                      {editingOrg?.id === org.id && editingOrg.mode === 'domain' && (
+                        <div className="mt-3 bg-slate-100 p-4 rounded-xl border border-slate-200">
+                          <p className="font-bold text-slate-800 text-sm mb-2">Configuração White Label</p>
+                          <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                            Peça ao cliente para criar um registro <strong>CNAME</strong> no painel de DNS dele (Registro.br, Cloudflare, etc.) apontando para <strong className="text-orange-600">app.apvoltcar.com</strong>.
+                          </p>
+                          <div className="flex gap-2 mb-3">
+                            <input
+                              type="text"
+                              placeholder="ex: painel.churrasco.com.br"
+                              value={editingOrg.custom_domain || ''}
+                              onChange={e => setEditingOrg({ ...editingOrg, custom_domain: e.target.value })}
+                              className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-orange-500 outline-none"
+                            />
+                            <button
+                              onClick={() => {
+                                handleSetCustomDomain(org.id, editingOrg.custom_domain!);
+                                setEditingOrg(null);
+                              }}
+                              className="bg-orange-600 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-orange-700"
+                            >
+                              Salvar
+                            </button>
+                          </div>
+                          {org.custom_domain && (
+                            <button
+                              onClick={() => handleVerifyDomain(org.id)}
+                              className="text-sm border-2 border-emerald-500 text-emerald-600 font-bold px-4 py-2 flex items-center gap-2 hover:bg-emerald-50 rounded-xl w-full justify-center transition"
+                            >
+                              <Activity size={16} /> Verificar Apontamento DNS
+                            </button>
+                          )}
+                        </div>
+                      )}
 
                       {/* Action Buttons */}
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -6331,14 +6833,20 @@ const SuperAdminPage = () => {
                         <button
                           onClick={async () => {
                             const newStatus = orgStatus === 'active' ? 'inactive' : 'active';
+                            const { data: { session } } = await supabase.auth.getSession();
                             await fetch(`/api/organizations/${org.id}/status`, {
                               method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
+                              headers: {
+                                'Content-Type': 'application/json',
+                                ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+                                ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                              },
                               body: JSON.stringify({ status: newStatus })
                             });
                             notify(`Loja ${newStatus === 'active' ? 'ativada' : 'desativada'}!`, newStatus === 'active' ? 'success' : 'error');
                             fetchData();
                           }}
+                          title={orgStatus === 'active' ? "Desativar Loja" : "Ativar Loja"}
                           className={cn(
                             "text-xs px-3 py-1.5 rounded-lg font-bold transition-colors flex items-center gap-1",
                             orgStatus === 'active'
@@ -6352,20 +6860,34 @@ const SuperAdminPage = () => {
                         {/* Billing Exempt Toggle */}
                         <button
                           onClick={async () => {
+                            const { data: { session } } = await supabase.auth.getSession();
                             await fetch(`/api/organizations/${org.id}/billing-exempt`, {
                               method: 'PATCH',
-                              headers: { 'Content-Type': 'application/json' },
+                              headers: {
+                                'Content-Type': 'application/json',
+                                ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+                                ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                              },
                               body: JSON.stringify({ billing_exempt: !org.billing_exempt })
                             });
                             notify(org.billing_exempt ? 'Isenção removida' : 'Loja marcada como isenta!', 'success');
                             fetchData();
                           }}
+                          title={org.billing_exempt ? "Remover Isenção de Faturamento" : "Isentar Loja de Faturamento"}
                           className={cn(
                             "text-xs px-3 py-1.5 rounded-lg font-bold transition-colors",
                             org.billing_exempt ? "bg-purple-100 text-purple-700 hover:bg-purple-200" : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                           )}
                         >
                           ⭐ {org.billing_exempt ? 'Remover Isenção' : 'Isentar Cobrança'}
+                        </button>
+
+                        {/* Custom Domain Edit Button */}
+                        <button
+                          onClick={() => setEditingOrg({ id: org.id, mode: 'domain', custom_domain: org.custom_domain })}
+                          className="bg-blue-50 text-blue-600 hover:bg-blue-100 text-xs px-3 py-1.5 rounded-lg font-bold transition-colors"
+                        >
+                          🌐 Configurar Domínio
                         </button>
 
                         {/* Set Billing Due Date */}
@@ -6379,9 +6901,14 @@ const SuperAdminPage = () => {
                             />
                             <button
                               onClick={async () => {
+                                const { data: { session } } = await supabase.auth.getSession();
                                 await fetch(`/api/organizations/${org.id}/billing-due`, {
                                   method: 'PATCH',
-                                  headers: { 'Content-Type': 'application/json' },
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+                                    ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                                  },
                                   body: JSON.stringify({ billing_due_date: editingOrg.billing_due_date })
                                 });
                                 notify('Vencimento atualizado!', 'success');
@@ -6390,7 +6917,7 @@ const SuperAdminPage = () => {
                               }}
                               className="px-3 py-2 bg-orange-600 text-white rounded-xl text-sm font-bold"
                             >Salvar</button>
-                            <button onClick={() => setEditingOrg(null)} className="px-3 py-2 bg-slate-100 rounded-xl"><X size={14} /></button>
+                            <button title="Cancelar" onClick={() => setEditingOrg(null)} className="px-3 py-2 bg-slate-100 rounded-xl"><X size={14} /></button>
                           </div>
                         ) : (
                           <button
@@ -6431,10 +6958,39 @@ const SuperAdminPage = () => {
                       </div>
                     </div>
 
-                    <div className="text-right shrink-0">
-                      <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">ID</p>
-                      <p className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-1 rounded-lg">{org.id.slice(0, 8)}...</p>
-                      <p className="text-[10px] text-slate-400 mt-1">{new Date(org.created_at).toLocaleDateString('pt-BR')}</p>
+                    <div className="text-right shrink-0 flex flex-col items-end gap-2">
+                      <div>
+                        <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">ID</p>
+                        <p className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-1 rounded-lg">{org.id.slice(0, 8)}...</p>
+                        <p className="text-[10px] font-bold text-slate-500 mt-2">⏱️ {getTimeAgo(org.created_at)}</p>
+                        <p className="text-[9px] text-slate-400">{new Date(org.created_at).toLocaleDateString('pt-BR')}</p>
+                      </div>
+
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(`Tem certeza absoluta que deseja excluir a loja "${org.name}" e TODOS os seus dados? Esta ação não pode ser desfeita.`)) return;
+                          try {
+                            const { data: { session } } = await supabase.auth.getSession();
+                            const res = await fetch(`/api/organizations/${org.id}`, {
+                              method: 'DELETE',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+                                ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                              }
+                            });
+                            if (!res.ok) throw new Error('Falha ao excluir');
+                            notify('Loja excluída permanentemente.', 'success');
+                            fetchData();
+                          } catch (e: any) {
+                            notify(e.message || 'Erro ao excluir organização', 'error');
+                          }
+                        }}
+                        title="Excluir Loja Permanentemente"
+                        className="mt-auto text-xs bg-red-100 text-red-600 px-3 py-1.5 rounded-lg font-bold hover:bg-red-200 transition-colors flex items-center gap-1 shadow-sm"
+                      >
+                        <Trash2 size={12} /> Excluir
+                      </button>
                     </div>
                   </div>
                 </motion.div>
@@ -6600,9 +7156,10 @@ const SuperAdminPage = () => {
               setShowPaymentModal({ id: null, name: 'Selecionar loja...' });
               setPaymentForm({ amount: '', month_ref: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`, notes: '', payment_method: 'pix' });
             }}
+            title="Registrar um novo pagamento manualmente"
             className="w-full py-3 border-2 border-dashed border-emerald-300 text-emerald-600 font-bold rounded-2xl hover:bg-emerald-50 transition-colors flex items-center justify-center gap-2"
           >
-            <Plus size={18} /> Registrar Pagamento Manual
+            <Plus size={18} aria-hidden="true" /> Registrar Pagamento Manual
           </button>
         </div>
       )}
@@ -6619,15 +7176,17 @@ const SuperAdminPage = () => {
             >
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-black text-slate-900">Registrar Pagamento</h2>
-                <button onClick={() => setShowPaymentModal(null)} className="p-2 hover:bg-gray-100 rounded-full">
-                  <X size={20} />
+                <button onClick={() => setShowPaymentModal(null)} title="Fechar Janela" aria-label="Fechar janela de registro de pagamento" className="p-2 hover:bg-gray-100 rounded-full">
+                  <X size={20} aria-hidden="true" />
                 </button>
               </div>
               <div className="space-y-4">
                 {/* Org selector */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Loja</label>
+                  <label htmlFor="payment-org-id" className="block text-xs font-bold text-slate-400 uppercase mb-1">Loja</label>
                   <select
+                    id="payment-org-id"
+                    title="Selecione a loja para o pagamento"
                     value={showPaymentModal.id || ''}
                     onChange={e => setShowPaymentModal({ ...orgs.find(o => o.id === e.target.value), id: e.target.value })}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm font-bold"
@@ -6639,10 +7198,12 @@ const SuperAdminPage = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Valor (R$)</label>
+                  <label htmlFor="payment-amount" className="block text-xs font-bold text-slate-400 uppercase mb-1">Valor (R$)</label>
                   <input
+                    id="payment-amount"
                     type="number"
                     step="0.01"
+                    title="Insira o valor do pagamento"
                     value={paymentForm.amount}
                     onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
                     placeholder="199.90"
@@ -6650,17 +7211,21 @@ const SuperAdminPage = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Mês de Referência</label>
+                  <label htmlFor="payment-month-ref" className="block text-xs font-bold text-slate-400 uppercase mb-1">Mês de Referência</label>
                   <input
+                    id="payment-month-ref"
                     type="month"
+                    title="Selecione o mês de referência deste pagamento"
                     value={paymentForm.month_ref}
                     onChange={e => setPaymentForm({ ...paymentForm, month_ref: e.target.value })}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-bold"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Forma de Pagamento</label>
+                  <label htmlFor="payment-method" className="block text-xs font-bold text-slate-400 uppercase mb-1">Forma de Pagamento</label>
                   <select
+                    id="payment-method"
+                    title="Escolha o método de pagamento utilizado"
                     value={paymentForm.payment_method}
                     onChange={e => setPaymentForm({ ...paymentForm, payment_method: e.target.value })}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
@@ -6673,9 +7238,11 @@ const SuperAdminPage = () => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Observações</label>
+                  <label htmlFor="payment-notes" className="block text-xs font-bold text-slate-400 uppercase mb-1">Observações</label>
                   <input
+                    id="payment-notes"
                     type="text"
+                    title="Adicione observações se necessário"
                     value={paymentForm.notes}
                     onChange={e => setPaymentForm({ ...paymentForm, notes: e.target.value })}
                     placeholder="Opcional..."
@@ -6685,9 +7252,14 @@ const SuperAdminPage = () => {
                 <button
                   disabled={!showPaymentModal.id || !paymentForm.amount || !paymentForm.month_ref}
                   onClick={async () => {
+                    const { data: { session } } = await supabase.auth.getSession();
                     const res = await fetch('/api/saas-payments', {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.access_token}` } : {}),
+                        ...(user?.id ? { 'x-super-admin-id': String(user.id) } : {})
+                      },
                       body: JSON.stringify({
                         org_id: showPaymentModal.id,
                         amount: parseFloat(paymentForm.amount),
@@ -7273,6 +7845,7 @@ const TrackingPage = () => {
     </div>
   );
 };
+
 
 // ============================================================
 // METRICS TAB - Dashboard de Métricas para Dono da Loja
