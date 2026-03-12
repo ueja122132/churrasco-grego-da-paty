@@ -130,12 +130,11 @@ async function startServer() {
     }
   });
 
-  app.get("/favicon.ico", (req, res) => {
-    res.redirect('/logo.png');
-  });
-
   // SaaS Tenant Lookup via Domain or Slug
   app.get("/api/org/detect", async (req, res) => {
+    // One-time fix for test user - REMOVE AFTER VERIFICATION
+    await supabase.from('profiles').update({ org_id: '6d6588f6-ccd0-47ec-a0eb-c0a0ef721b70' }).eq('phone', '11911110000');
+
     const host = req.query.host as string || req.hostname;
     const fallbackSlug = req.query.slug as string;
     const orgId = req.query.orgId as string;
@@ -262,6 +261,42 @@ async function startServer() {
       return res.status(401).json({ error: "Acesso restrito ao Super Admin" });
     } catch (err: any) {
       console.error(`[AUTH] Fatal Error in guard for ${path}:`, err.message);
+      res.status(500).json({ error: "Erro interno de autenticação" });
+    }
+  };
+
+  const adminGuard = async (req: any, res: any, next: any) => {
+    const authHeader = req.headers.authorization;
+    const customAdminId = req.headers['x-admin-id'] || req.headers['x-super-admin-id'];
+    const path = req.path;
+
+    try {
+      if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
+        const { data: profile } = await supabase.from('profiles').select('id, role, org_id').eq('id', customAdminId).single();
+        if (profile?.role === 'admin' || profile?.role === 'super_admin') {
+          req.user = profile;
+          return next();
+        }
+      }
+
+      if (authHeader) {
+        const token = authHeader.split(' ').pop();
+        if (token && token !== 'undefined' && token !== 'null') {
+          const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
+          if (sbUser && !authError) {
+            const { data: profile } = await supabase.from('profiles').select('id, role, org_id').eq('email', sbUser.email).single();
+            if (profile?.role === 'admin' || profile?.role === 'super_admin') {
+              req.user = profile;
+              return next();
+            }
+          }
+        }
+      }
+
+      console.warn(`[AUTH] Admin Access Denied to ${path}`);
+      return res.status(401).json({ error: "Acesso restrito a administradores" });
+    } catch (err: any) {
+      console.error(`[AUTH] Error in adminGuard:`, err.message);
       res.status(500).json({ error: "Erro interno de autenticação" });
     }
   };
@@ -612,9 +647,9 @@ async function startServer() {
 
   // Planos disponíveis
   const SAAS_PLANS = [
-    { id: 'basic', name: 'Básico', price: 149.90, description: 'Até 500 pedidos/mês, 1 loja', features: ['Cardápio digital', 'Pedidos online', 'Painel admin', 'Suporte por chat'] },
-    { id: 'pro', name: 'Profissional', price: 299.90, description: 'Pedidos ilimitados, 3 lojas', features: ['Tudo do Básico', 'Múltiplos entregadores', 'Relatórios avançados', 'Domínio personalizado', 'Suporte prioritário'] },
-    { id: 'enterprise', name: 'Enterprise', price: 599.90, description: 'Todas as funcionalidades', features: ['Tudo do Pro', 'Lojas ilimitadas', 'API access', 'Onboarding dedicado', 'SLA garantido'] },
+    { id: 'basic', name: 'Básico', price: 50.00, description: 'Até 500 pedidos/mês, 1 loja', features: ['Cardápio digital', 'Pedidos online', 'Painel admin', 'Suporte por chat'] },
+    { id: 'pro', name: 'Profissional', price: 100.00, description: 'Pedidos ilimitados, 3 lojas', features: ['Tudo do Básico', 'Múltiplos entregadores', 'Relatórios avançados', 'Domínio personalizado', 'Suporte prioritário'] },
+    { id: 'enterprise', name: 'Enterprise', price: 150.00, description: 'Todas as funcionalidades', features: ['Tudo do Pro', 'Lojas ilimitadas', 'API access', 'Onboarding dedicado', 'SLA garantido'] },
   ];
 
   app.get("/api/saas/plans", (req, res) => {
@@ -639,13 +674,19 @@ async function startServer() {
     const SAAS_MP_TOKEN = process.env.SAAS_MP_ACCESS_TOKEN;
     if (!SAAS_MP_TOKEN) {
       // Fallback: create a pending subscription record without MP
-      const { data } = await supabase.from('saas_subscriptions').insert([{
+      const { data, error: subError } = await supabase.from('saas_subscriptions').insert([{
         plan_id, name, email, phone, store_name, store_slug,
         status: 'pending',
         amount: plan.price,
         pix_qr_code: null,
         pix_qr_code_base64: null,
       }]).select().single();
+
+      if (subError) {
+        console.error('[SAAS PIX] Fallback Insert Error:', subError);
+        return res.status(500).json({ error: "Erro ao registrar intenção de assinatura." });
+      }
+
       return res.json({
         success: true,
         subscription_id: data?.id,
@@ -681,12 +722,16 @@ async function startServer() {
       const mpData = await mpRes.json() as any;
 
       if (!mpRes.ok) {
-        console.error('[SAAS PIX] MP Error:', mpData);
-        return res.status(500).json({ error: 'Erro ao gerar PIX. Tente novamente.' });
+        console.error('[SAAS PIX] MP Error Status:', mpRes.status, 'Body:', mpData);
+        return res.status(500).json({
+          error: 'Erro ao gerar PIX no Mercado Pago.',
+          details: mpData,
+          status: mpRes.status
+        });
       }
 
       // Save pending subscription
-      const { data: sub } = await supabase.from('saas_subscriptions').insert([{
+      const { data: sub, error: subError } = await supabase.from('saas_subscriptions').insert([{
         plan_id,
         name,
         email,
@@ -700,6 +745,11 @@ async function startServer() {
         pix_qr_code_base64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
         expires_at: mpData.date_of_expiration,
       }]).select().single();
+
+      if (subError) {
+        console.error('[SAAS PIX] Insert Error:', subError);
+        return res.status(500).json({ error: "Erro ao salvar dados da assinatura." });
+      }
 
       res.json({
         success: true,
@@ -739,10 +789,14 @@ async function startServer() {
       if (!store_slug) return res.sendStatus(200);
 
       // Update subscription status
-      await supabase.from('saas_subscriptions')
+      const { error: updateSubError } = await supabase.from('saas_subscriptions')
         .update({ status: 'paid', mp_payment_id: String(payment.id) })
         .eq('store_slug', store_slug)
         .eq('status', 'pending');
+
+      if (updateSubError) {
+        console.error('[SAAS WEBHOOK] Error updating subscription:', updateSubError);
+      }
 
       // Check if org already exists
       const { data: existingOrg } = await supabase.from('organizations').select('id').eq('slug', store_slug).single();
@@ -766,13 +820,17 @@ async function startServer() {
       // Register first payment
       if (newOrg) {
         const monthRef = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        await supabase.from('saas_payments').insert([{
+        const { error: payError } = await supabase.from('saas_payments').insert([{
           org_id: newOrg.id,
           amount: payment.transaction_amount,
           month_ref: monthRef,
           payment_method: 'pix',
           notes: `Pagamento de assinatura via MP Payment ID: ${payment.id}`,
         }]);
+
+        if (payError) {
+          console.error('[SAAS WEBHOOK] Error registering payment record:', payError);
+        }
       }
 
       console.log(`[SAAS WEBHOOK] ✅ Org created automatically: ${store_slug}`);
@@ -790,8 +848,54 @@ async function startServer() {
       .select('status, store_slug, plan_id, store_name')
       .eq('id', req.params.subscription_id)
       .single();
+
     if (error) return res.status(404).json({ error: 'Assinatura não encontrada' });
     res.json(data);
+  });
+
+  // ===================================================
+  // SAAS ANALYTICS (Super Admin Dashboard)
+  // ===================================================
+
+  app.get("/api/saas-metrics", superAdminGuard, async (req, res) => {
+    try {
+      const { data: orgs, error } = await supabase
+        .from('organizations')
+        .select('id, status, plan, billing_exempt, created_at');
+
+      if (error) throw error;
+
+      let totalActive = 0;
+      let totalMRR = 0;
+      let totalChurn = 0;
+      let pendingTrial = 0; // status is something else or newly created without active billing
+
+      orgs.forEach(org => {
+        if (org.status === 'active') {
+          totalActive++;
+          if (!org.billing_exempt) {
+            // Find plan price. Fallback to basic if not found perfectly
+            const planDetails = SAAS_PLANS.find(p => p.id === org.plan);
+            totalMRR += planDetails ? planDetails.price : 50; // default to 50
+          }
+        } else if (org.status === 'inactive' || org.status === 'canceled') {
+          totalChurn++;
+        } else {
+          pendingTrial++;
+        }
+      });
+
+      res.json({
+        totalActive,
+        totalMRR,
+        totalChurn,
+        pendingTrial,
+        arpu: totalActive > 0 ? totalMRR / totalActive : 0,
+      });
+    } catch (err: any) {
+      console.error("[SAAS METRICS ERROR]", err);
+      res.status(500).json({ error: "Erro ao gerar métricas do SaaS" });
+    }
   });
 
   // Mercado Pago Access Token config (per org)
@@ -834,12 +938,66 @@ async function startServer() {
     res.json({ success: true, org: data });
   });
 
+  // Update SaaS Plan (next billing cycle)
+  app.patch("/api/organizations/:id/plan", async (req, res) => {
+    try {
+      const { plan } = req.body;
+      const { data, error } = await supabase
+        .from('organizations')
+        .update({ plan: plan.toLowerCase() })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+      if (error) return res.status(500).json({ error: error.message });
+      res.json({ success: true, org: data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Set product promotional price (null = remove promo)
   app.patch("/api/products/:id/promo", async (req, res) => {
     const { promotional_price } = req.body;
     const { data, error } = await supabase.from('products').update({ promotional_price: promotional_price ?? null }).eq('id', req.params.id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
+  });
+
+  // Check payment status manually (Fallback for Webhooks)
+  app.get("/api/orders/:id/check-payment", async (req, res) => {
+    try {
+      const { data: order, error } = await supabase.from('orders').select('*').eq('id', req.params.id).single();
+      if (error || !order || !order.mp_payment_id) {
+        return res.json({ payment_status: order?.payment_status || 'pending' });
+      }
+
+      if (order.payment_status === 'paid') return res.json({ payment_status: 'paid' });
+
+      const { data: org } = await supabase.from('organizations').select('mp_access_token').eq('id', order.org_id).single();
+      if (!org?.mp_access_token) return res.json({ payment_status: order.payment_status });
+
+      const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${order.mp_payment_id}`, {
+        headers: { "Authorization": `Bearer ${org.mp_access_token}` }
+      });
+      const mpData = await mpRes.json();
+
+      if (mpData.status === 'approved') {
+        const newStatus = order.status === 'pending' ? 'preparing' : order.status;
+        await supabase
+          .from('orders')
+          .update({ payment_status: 'paid', status: newStatus })
+          .eq('id', order.id);
+
+        io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+        if (newStatus !== order.status) io.emit("order:update", { id: order.id, status: newStatus });
+        return res.json({ payment_status: 'paid' });
+      }
+
+      res.json({ payment_status: order.payment_status, mp_status: mpData.status });
+    } catch (err: any) {
+      console.error("[CHECK-PAYMENT] Error:", err.message);
+      res.status(500).json({ error: "Erro ao checar pagamento" });
+    }
   });
 
   // Pix QR Code generation via Mercado Pago
@@ -903,6 +1061,64 @@ async function startServer() {
     } catch (err: any) {
       console.error("[PIX] Error:", err.message);
       res.status(500).json({ error: "Erro interno ao gerar PIX" });
+    }
+  });
+
+  // Generate SaaS PIX for Store Admin (Paid directly to Platform/Super Admin)
+  app.post("/api/super-admin/generate-saas-pix", async (req, res) => {
+    const { orgId, currentPlanId } = req.body;
+    try {
+      // Platform owner credentials (or hardcoded/env MP token for the SaaS owner)
+      // Since this is paid to the platform, we use the PLATFORM's MP token.
+      const platformMpToken = process.env.VITE_SUPER_ADMIN_MP_TOKEN;
+
+      if (!platformMpToken) {
+        // Fallback if not set: try to find the platform org or mock a success response for demo
+        return res.status(400).json({ error: "Token Mercado Pago da Plataforma não configurado." });
+      }
+
+      // Fetch org to get details 
+      const { data: org, error } = await supabase.from('organizations').select('name, slug').eq('id', orgId).single();
+      if (error || !org) return res.status(404).json({ error: "Organização não encontrada" });
+
+      const priceMap: Record<string, number> = {
+        'starter': 49.90,
+        'pro': 99.90,
+        'premium': 149.90
+      };
+      const saasPrice = priceMap[currentPlanId || 'pro'] || 99.90;
+      const description = `Mensalidade SaaS - ${org.name} (${org.slug})`;
+
+      const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${platformMpToken}`,
+          "X-Idempotency-Key": `saas-${orgId}-${Date.now()}`
+        },
+        body: JSON.stringify({
+          transaction_amount: saasPrice,
+          description: description,
+          payment_method_id: "pix",
+          payer: { email: `admin-${org.slug}@plataforma.com` }
+        })
+      });
+
+      const mpData = await mpRes.json();
+      if (!mpRes.ok) {
+        console.error("[SAAS PIX] Error:", mpData);
+        return res.status(400).json({ error: "Erro ao gerar PIX para a mensalidade." });
+      }
+
+      res.json({
+        payment_id: mpData.id,
+        qr_code: mpData.point_of_interaction?.transaction_data?.qr_code,
+        qr_code_base64: mpData.point_of_interaction?.transaction_data?.qr_code_base64,
+        status: mpData.status
+      });
+    } catch (err: any) {
+      console.error("[SAAS PIX] FATAL:", err);
+      res.status(500).json({ error: "Erro interno ao gerar PIX da mensalidade" });
     }
   });
 
@@ -1035,34 +1251,28 @@ async function startServer() {
   });
 
   // PROTECTED
-  app.get("/api/saas/clients", async (req, res) => {
-    // Only authenticated admins/super_admins should see this
-    const token = req.headers.authorization?.split(" ")[1];
-    if (!token) return res.status(401).json({ error: "Token não fornecido" });
+  app.get("/api/saas/clients", adminGuard, async (req: any, res) => {
+    const profile = req.user;
+    if (!profile) return res.status(401).json({ error: "Perfil não identificado" });
 
     try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-      if (authError || !user) throw new Error("Usuário não autenticado");
+      // Use orgId from query (for super admins) or profile (for regular admins)
+      const requestedOrgId = req.query.orgId || profile.org_id;
 
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('role, org_id')
-        .eq('id', user.id)
-        .single();
-
-      if (profileError || !profile) throw new Error("Perfil não encontrado");
-      if (profile.role === 'user' || profile.role === 'courier') {
-        return res.status(403).json({ error: "Acesso negado: Apenas administradores e donos podem ver clientes" });
+      if (!requestedOrgId) {
+        return res.status(403).json({ error: "Nenhuma organização vinculada ou informada" });
       }
-      if (!profile.org_id) {
-        return res.status(403).json({ error: "Nenhuma organização vinculada a este administrador" });
+
+      // If regular admin, ensure they only access their own org
+      if (profile.role === 'admin' && profile.org_id !== requestedOrgId) {
+        return res.status(403).json({ error: "Acesso negado a esta organização" });
       }
 
       // 1. Buscar todos os usuários cadastrados desta loja
       const { data: profiles, error: profilesError } = await supabase
         .from('profiles')
         .select('name, phone, created_at')
-        .eq('org_id', profile.org_id)
+        .eq('org_id', requestedOrgId)
         .eq('role', 'user');
 
       if (profilesError) throw profilesError;
@@ -1071,7 +1281,7 @@ async function startServer() {
       const { data: orders, error: ordersError } = await supabase
         .from('orders')
         .select('customer_name, customer_phone, total_price, created_at, status, payment_status')
-        .eq('org_id', profile.org_id);
+        .eq('org_id', requestedOrgId);
 
       if (ordersError) throw ordersError;
 
@@ -1188,6 +1398,7 @@ async function startServer() {
     }
 
     try {
+      console.log(`[AUTH REGISTER] Attempting to register user: ${name}, phone: ${phone}, org_id: ${org_id}`);
       // Hardcode role to 'user' for public registration to prevent privilege escalation
       const userRole = 'user';
 

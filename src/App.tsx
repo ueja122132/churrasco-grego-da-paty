@@ -40,7 +40,9 @@ import {
   ClipboardList,
   Wallet,
   Bell,
-  Map
+  Map,
+  Star,
+  Flame
 } from "lucide-react";
 import StoreLanding from "./components/StoreLanding";
 import LoginModal from "./components/LoginModal";
@@ -605,7 +607,7 @@ const AppInner = () => {
   return (
     <div className={cn(
       "min-h-screen transition-all duration-700 bg-[#F8FAFC]",
-      (!isPublicRoute && !isPlatformRoute) ? "pb-20 md:pb-0 md:pl-20" : ""
+      (!isPlatformRoute && (!isPublicRoute || user)) ? "pb-20 md:pb-0 md:pl-20" : ""
     )}>
       <style>{`
         :root {
@@ -629,7 +631,7 @@ const AppInner = () => {
         -webkit-text-fill-color: transparent;
         }
       `}</style>
-      {(!isPublicRoute && !isPlatformRoute) && <Navbar />}
+      {(!isPlatformRoute && (!isPublicRoute || user)) && <Navbar />}
       <main className={cn(
         "animate-in fade-in slide-in-from-bottom-4 duration-1000",
         (isPublicRoute) ? "w-full min-h-screen" : "max-w-7xl mx-auto p-4 md:p-8"
@@ -653,7 +655,7 @@ const AppInner = () => {
           <Route path="/:slug/courier-dashboard" element={<CourierDashboard />} />
           <Route path="/courier" element={<Navigate to="/courier-dashboard" replace />} />
           <Route path="/venda" element={<SaaSLandingPage />} />
-          <Route path="/venda/cadastro" element={<SaaSStoreRegister />} />
+          <Route path="/venda/cadastro" element={<Navigate to="/assinar" replace />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/:slug/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
@@ -1027,7 +1029,7 @@ const SalesPage = () => {
         setShowPayment(false);
         setPixData(null);
         setLastOrder(null);
-        notify("🍢 Pagamento confirmado! Seu pedido já está na cozinha.", "success");
+        notify("Pagamento confirmado, volte sempre!", "success");
       }
     };
 
@@ -1036,6 +1038,26 @@ const SalesPage = () => {
       socket.off("order:payment_update", onPaymentUpdate);
     };
   }, []); // Mount only! Uses ref for closure-safe state access
+
+  // Fallback Polling for PIX Payment
+  useEffect(() => {
+    if (!showPayment || !lastOrder) return;
+    const interval = setInterval(() => {
+      fetch(`/api/orders/${lastOrder.id}/check-payment`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.payment_status === 'paid') {
+            setShowPayment(false);
+            setPixData(null);
+            setLastOrder(null);
+            notify("Pagamento confirmado, volte sempre!", "success");
+            clearInterval(interval);
+          }
+        })
+        .catch(console.error);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [showPayment, lastOrder]);
 
   const openCustomization = (product: Product) => {
     setSelectedProduct(product);
@@ -1263,14 +1285,16 @@ const SalesPage = () => {
           <h1 className="text-4xl md:text-5xl lg:text-6xl font-black text-slate-900 tracking-tighter uppercase italic break-words shrink-0">
             <span className="text-gradient leading-tight">{org?.name || "Premium Store"}</span>
           </h1>
-          <p className="text-slate-500 mt-2 font-medium tracking-wide">Bem-vindo ao melhor sabor da região!</p>
+          <p className="text-slate-500 mt-2 font-medium tracking-wide">
+            {user ? `Bem-vindo(a), ${user.name}!` : "Bem-vindo ao melhor sabor da região!"}
+          </p>
           <div className="mt-3 flex items-center gap-2">
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-3 py-1">
               <UtensilsCrossed size={10} className="text-orange-400" />
-              <span className="text-[10px] text-gray-400 font-semibold tracking-wide">Powered by <span className="text-orange-500">MenuFast</span></span>
+              <span className="text-[10px] text-gray-400 font-semibold tracking-wide">Feito por <span className="text-orange-500 font-black">Ajeu Valverde</span></span>
               <span className="text-gray-300 text-[10px]">•</span>
               <Phone size={9} className="text-gray-400" />
-              <span className="text-[10px] text-gray-400">(62) 99999‑0001</span>
+              <span className="text-[10px] text-gray-400">(38) 99904‑0469</span>
             </div>
           </div>
         </div>
@@ -2137,9 +2161,29 @@ const DeliveryPage = () => {
       if (currentOrder && currentOrder.payment_status === 'paid') {
         updateStatus(currentOrder.id, 'delivered');
         setShowQrModal(null);
+        alert("Pagamento confirmado, volte sempre!");
       }
     }
   }, [orders, showQrModal, org]);
+
+  // Fallback Polling for PIX Payment (Delivery)
+  useEffect(() => {
+    if (!showQrModal || showQrModal.payment_status === 'paid') return;
+    const interval = setInterval(() => {
+      fetch(`/api/orders/${showQrModal.id}/check-payment`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.payment_status === 'paid') {
+            updateStatus(showQrModal.id, 'delivered');
+            setShowQrModal(null);
+            alert("Pagamento confirmado, volte sempre!");
+            clearInterval(interval);
+          }
+        })
+        .catch(console.error);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [showQrModal]);
 
   useEffect(() => {
     if (showQrModal && showQrModal.payment_status !== 'paid' && org) {
@@ -2841,7 +2885,7 @@ const AdminPage = () => {
   const [extraName, setExtraName] = useState("");
   const [extraPrice, setExtraPrice] = useState("");
 
-  const [activeTab, setActiveTab] = useState<'products' | 'couriers' | 'settings' | 'metrics' | 'clients'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'couriers' | 'settings' | 'metrics' | 'clients' | 'faturamento'>('products');
   const [clients, setClients] = useState<{ nome: string; telefone: string; total_pedidos: number; total_gasto: number; ultimo_pedido: string }[]>([]);
   const [couriers, setCouriers] = useState<User[]>([]);
   const [courierStats, setCourierStats] = useState<Record<string, { total_commissions: number, total_advances: number, net_pay: number }>>({});
@@ -2859,6 +2903,71 @@ const AdminPage = () => {
   const { org } = useTenant();
   const { user } = useAuth();
   const { notify } = useNotification();
+
+  // SaaS Billing State
+  const SAAS_PLANS = [
+    { id: 'basic', name: 'Básico', price: 50.00, desc: 'Ideal para quem está começando', features: ['Gestão de Cardápio', 'Link do App', 'Suporte Básico'] },
+    { id: 'pro', name: 'Profissional', price: 100.00, desc: 'Para lojas em crescimento', features: ['Tudo do Básico', 'Painel Motoboys', 'Pagamento PIX', 'Relatórios'] },
+    { id: 'enterprise', name: 'Enterprise', price: 150.00, desc: 'Controle total e sem taxas', features: ['Tudo do Pro', 'ZERO Taxas %', 'Domínio Próprio', 'Prioridade de Suporte'] }
+  ];
+
+  const currentPlanObj = SAAS_PLANS.find(p => p.id === (org?.plan?.toLowerCase() || 'pro')) || SAAS_PLANS[1];
+  const [selectedPlanId, setSelectedPlanId] = useState<string>(currentPlanObj.id);
+  const [changingPlan, setChangingPlan] = useState(false);
+
+  // When org loads, sync selected plan
+  useEffect(() => {
+    if (org?.plan) setSelectedPlanId(org.plan.toLowerCase());
+  }, [org?.plan]);
+
+  const handleSelectPlan = async (planId: string) => {
+    if (!org) return;
+    setChangingPlan(true);
+    try {
+      const res = await fetch(`/api/organizations/${org.id}/plan`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('sb-access-token')}`,
+          'x-admin-id': String(user?.id)
+        },
+        body: JSON.stringify({ plan: planId })
+      });
+      if (!res.ok) throw new Error("Erro ao alterar plano");
+      notify("Plano alterado! O novo valor será cobrado apenas no próximo mês.", "success");
+      setSelectedPlanId(planId);
+      // In a real app we'd trigger a context refresh here
+    } catch (e: any) {
+      notify(e.message, "error");
+    } finally {
+      setChangingPlan(false);
+    }
+  };
+
+  const [saasPixData, setSaasPixData] = useState<any>(null);
+  const [generatingSaasPix, setGeneratingSaasPix] = useState(false);
+  const generateSaasPix = async () => {
+    if (!org) return;
+    setGeneratingSaasPix(true);
+    try {
+      const res = await fetch(`/api/super-admin/generate-saas-pix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        // Always charge the CURRENT active plan value, not the newly selected one (unless told otherwise)
+        body: JSON.stringify({ orgId: org.id, currentPlanId: currentPlanObj.id })
+      });
+      if (!res.ok) throw new Error("Erro ao gerar PIX");
+      const data = await res.json();
+      setSaasPixData(data);
+    } catch (err: any) {
+      console.error(err);
+      notify(err.message || "Erro ao gerar PIX da assinatura", "error");
+    } finally {
+      setGeneratingSaasPix(false);
+    }
+  };
+
+
 
   const fetchClients = async () => {
     if (!org) return;
@@ -2931,7 +3040,11 @@ const AdminPage = () => {
     try {
       const res = await fetch(`/api/organizations/${org.id}/operating-hours`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('sb-access-token')}`,
+          'x-admin-id': user?.id ? String(user.id) : ''
+        },
         body: JSON.stringify({ operating_hours: hoursToSave })
       });
       if (res.ok) {
@@ -3299,6 +3412,17 @@ const AdminPage = () => {
           title="Ver métricas da loja"
         >
           📊 Métricas
+        </button>
+        <button
+          onClick={() => setActiveTab('faturamento')}
+          className={cn(
+            "px-6 py-3 rounded-2xl font-bold transition-all whitespace-nowrap",
+            activeTab === 'faturamento' ? "bg-purple-600 text-white shadow-lg" : "bg-white text-gray-500 hover:bg-gray-50"
+          )}
+          aria-pressed={activeTab === 'faturamento'}
+          title="SaaS Plan and Billing"
+        >
+          ⭐ Plano de Assinatura
         </button>
       </div>
 
@@ -3809,6 +3933,128 @@ const AdminPage = () => {
                   )}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'faturamento' && (
+          <div className="space-y-8 max-w-4xl mx-auto">
+            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+              <h2 className="text-2xl font-black mb-6 flex items-center gap-3"><Star className="text-purple-600" /> Assinatura da Loja</h2>
+
+              <div className="bg-purple-50 p-6 rounded-2xl border border-purple-100 mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-1">Status da Fatura</h3>
+                  <div className="flex items-center gap-3">
+                    <p className="text-3xl font-black text-gray-900 capitalize">
+                      {org?.subscription_status === 'trialing' ? 'Trial' :
+                        org?.subscription_status === 'active' ? 'Ativo' :
+                          org?.subscription_status === 'canceled' ? 'Cancelado' : 'Free / Pendente'}
+                    </p>
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest",
+                      org?.subscription_status === 'active' ? "bg-green-100 text-green-700" :
+                        org?.subscription_status === 'trialing' ? "bg-blue-100 text-blue-700" :
+                          "bg-orange-100 text-orange-700"
+                    )}>
+                      {org?.subscription_status || 'DESCONHECIDO'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-left md:text-right">
+                  <p className="text-xs font-bold text-gray-400 uppercase">Próximo Vencimento</p>
+                  <p className="text-xl font-black text-gray-700">
+                    {org?.billing_due_date ? new Date(org.billing_due_date).toLocaleDateString('pt-BR') : 'A calcular'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mb-10">
+                <h3 className="text-lg font-bold text-gray-800 mb-4">Escolha seu Plano</h3>
+                <p className="text-sm text-gray-500 mb-6">
+                  Selecione o melhor pacote para a sua loja. <strong className="text-orange-600">Atenção:</strong> mudanças de plano passam a valer no vencimento do próximo mês!
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {SAAS_PLANS.map(plan => {
+                    const isSelected = selectedPlanId === plan.id;
+                    const isCurrentPlan = currentPlanObj.id === plan.id;
+                    return (
+                      <div
+                        key={plan.id}
+                        className={cn(
+                          "relative rounded-3xl p-6 border-2 transition-all flex flex-col",
+                          isSelected ? "border-purple-500 bg-purple-50/30 shadow-xl shadow-purple-100 scale-[1.02]" : "border-gray-100 bg-white hover:border-purple-200"
+                        )}
+                      >
+                        {isCurrentPlan && (
+                          <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-[10px] uppercase font-bold px-3 py-1 rounded-full shadow-sm whitespace-nowrap">
+                            Plano Atual
+                          </div>
+                        )}
+                        <h4 className="text-xl font-black text-gray-900 mb-1">{plan.name}</h4>
+                        <p className="text-xs text-gray-500 mb-4 h-8">{plan.desc}</p>
+                        <p className="text-3xl font-black text-purple-600 mb-6 font-mono">
+                          <span className="text-sm">R$</span> {plan.price.toFixed(2).replace('.', ',')}
+                        </p>
+                        <ul className="space-y-3 mb-6 flex-1 text-sm text-gray-600 font-medium">
+                          {plan.features.map((feat, idx) => (
+                            <li key={idx} className="flex flex-start gap-2">
+                              <CheckCircle2 size={16} className={isSelected ? "text-purple-500 shrink-0 mt-0.5" : "text-gray-300 shrink-0 mt-0.5"} />
+                              <span>{feat}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <button
+                          onClick={() => handleSelectPlan(plan.id)}
+                          disabled={isSelected || changingPlan}
+                          className={cn(
+                            "w-full py-3 rounded-2xl font-bold transition-all text-sm",
+                            isSelected ? "bg-purple-100 text-purple-700 cursor-default" : "bg-white border-2 border-gray-200 text-gray-600 hover:border-purple-500 hover:text-purple-600",
+                            changingPlan && "opacity-50"
+                          )}
+                        >
+                          {isSelected ? 'Plano Selecionado' : 'Escolher este'}
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="text-center pt-8 border-t border-gray-100">
+                <h3 className="text-lg font-bold text-gray-800 mb-2">Pagar Mensalidade ({currentPlanObj.name})</h3>
+                <p className="text-sm text-gray-500 mb-6">Validade e liberação da plataforma referentes ao mês atual (R$ {currentPlanObj.price.toFixed(2).replace('.', ',')}).</p>
+
+                {saasPixData ? (
+                  <div className="bg-gray-50 p-6 rounded-3xl border border-gray-100 inline-block shadow-sm">
+                    {saasPixData.qr_code_base64 && (
+                      <img
+                        src={`data:image/png;base64,${saasPixData.qr_code_base64}`}
+                        alt="QR Code PIX SaaS"
+                        className="w-48 h-48 mx-auto mb-4"
+                      />
+                    )}
+                    <p className="text-xs font-mono bg-gray-200 p-2 rounded break-all select-all">
+                      {saasPixData.qr_code}
+                    </p>
+                    <p className="text-xs text-green-600 font-bold mt-4 uppercase flex items-center justify-center gap-1">
+                      <CheckCircle2 size={14} /> PIX Gerado com sucesso
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={generateSaasPix}
+                    disabled={generatingSaasPix}
+                    className="bg-gray-900 text-white w-full sm:w-auto px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-sm hover:bg-black transition shadow-xl shadow-gray-300 disabled:opacity-50 flex items-center justify-center gap-2 mx-auto"
+                  >
+                    {generatingSaasPix ? 'Gerando PIX...' : <><QrCode size={20} /> Gerar PIX de R$ {currentPlanObj.price.toFixed(2).replace('.', ',')}</>}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )
@@ -4923,24 +5169,24 @@ const SaaSLandingPage = () => {
 
   const plans = [
     {
-      name: "Bronze",
-      price: "R$ 97",
-      features: ["Até 50 pedidos/mês", "1 Unidade", "Painel Básico", "Suporte Email"],
+      name: "Básico",
+      price: "R$ 50,00",
+      features: ["Até 500 pedidos/mês", "1 Unidade", "Painel Básico", "Suporte Público"],
       color: "from-orange-400 to-orange-600",
       delay: 0.1
     },
     {
-      name: "Prata",
-      price: "R$ 197",
-      features: ["Pedidos Ilimitados", "Até 3 Unidades", "Painel Avançado", "Suporte WhatsApp", "Gestão de Entregas"],
+      name: "Profissional",
+      price: "R$ 100,00",
+      features: ["Pedidos Ilimitados", "Até 3 Unidades", "Painel Avançado", "Suporte WhatsApp", "Domínio Personalizado"],
       color: "from-blue-500 to-indigo-600",
       popular: true,
       delay: 0.2
     },
     {
-      name: "Ouro",
-      price: "R$ 397",
-      features: ["Tudo do Prata", "Unidades Ilimitadas", "Customização Total", "Consultoria de Vendas", "Prioridade no Suporte"],
+      name: "Enterprise",
+      price: "R$ 150,00",
+      features: ["Tudo do Profissional", "Unidades Ilimitadas", "Customização Total", "Consultoria VIP", "API Access"],
       color: "from-purple-600 to-pink-600",
       delay: 0.3
     }
@@ -4999,7 +5245,7 @@ const SaaSLandingPage = () => {
             </p>
             <div className="flex flex-col sm:flex-row gap-4">
               <button
-                onClick={() => navigate("/venda/cadastro")}
+                onClick={() => navigate("/assinar")}
                 className="bg-orange-600 text-white px-10 py-5 rounded-[2rem] font-black uppercase tracking-widest shadow-2xl shadow-orange-200 hover:scale-105 active:scale-95 transition-all text-sm flex items-center justify-center gap-3 group"
               >
                 Criar Minha Loja
@@ -5128,7 +5374,7 @@ const SaaSLandingPage = () => {
                   ))}
                 </ul>
                 <button
-                  onClick={() => navigate("/venda/cadastro")}
+                  onClick={() => navigate("/assinar")}
                   className={cn(
                     "w-full py-5 rounded-[2rem] font-black uppercase tracking-widest transition-all text-xs",
                     plan.popular
@@ -6405,6 +6651,7 @@ const SuperAdminPage = () => {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'orgs' | 'financeiro' | 'security'>('overview');
   const [financial, setFinancial] = useState<any | null>(null);
+  const [saasMetrics, setSaasMetrics] = useState<{ totalActive: number; totalMRR: number; totalChurn: number; pendingTrial: number; arpu: number } | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState<any | null>(null); // org to register payment
   const [paymentForm, setPaymentForm] = useState({ amount: '', month_ref: '', notes: '', payment_method: 'pix' });
 
@@ -6417,14 +6664,17 @@ const SuperAdminPage = () => {
         ...(user?.id ? { "x-super-admin-id": String(user.id) } : {})
       };
 
-      const [metricsRes, orgsRes] = await Promise.all([
+      const [metricsRes, orgsRes, saasMetricsRes] = await Promise.all([
         fetch('/api/admin/global-metrics', { headers }),
-        fetch('/api/organizations', { headers })
+        fetch('/api/organizations', { headers }),
+        fetch('/api/saas-metrics', { headers })
       ]);
       const metricsData = await metricsRes.json();
       const orgsData = await orgsRes.json();
+      const saasMetricsData = await saasMetricsRes.json();
       setMetrics(metricsData);
       setOrgs(Array.isArray(orgsData) ? orgsData : []);
+      setSaasMetrics(saasMetricsData);
     } catch (err) {
       notify('Erro ao carregar dados', 'error');
     } finally {
@@ -6448,6 +6698,19 @@ const SuperAdminPage = () => {
   useEffect(() => {
     fetchData();
     fetchFinancial();
+
+    // Realtime listener for org updates (e.g. plan changes)
+    const channel = supabase
+      .channel('super_admin_org_updates')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'organizations' }, () => {
+        fetchData();
+        fetchFinancial();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const handleCreateOrg = async () => {
@@ -6599,29 +6862,72 @@ const SuperAdminPage = () => {
       {/* Overview Tab */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
-          {/* Global Metrics */}
+          {/* SaaS Core Metrics */}
+          <div className="bg-slate-900 p-6 rounded-[2.5rem] text-white shadow-xl shadow-slate-200 overflow-hidden relative">
+            <div className="absolute top-0 right-0 p-8 opacity-10">
+              <BarChart3 size={160} />
+            </div>
+            <div className="relative z-10">
+              <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400 mb-6 flex items-center gap-2">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                SaaS Dashboard Analytics
+              </h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-tighter mb-1">MRR (Faturamento Recorrente)</p>
+                  <p className="text-3xl font-black text-white">
+                    R$ {(saasMetrics?.totalMRR || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-[10px] text-emerald-400 font-bold mt-1">▲ {(saasMetrics?.totalActive || 0)} lojas pagantes</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-tighter mb-1">Churn Rate (Desistência)</p>
+                  <p className="text-3xl font-black text-white">
+                    {saasMetrics?.totalChurn || 0}
+                  </p>
+                  <p className="text-[10px] text-red-400 font-bold mt-1">Lojas Inativas</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-tighter mb-1">Ticket Médio (ARPU)</p>
+                  <p className="text-3xl font-black text-white">
+                    R$ {(saasMetrics?.arpu || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </p>
+                  <p className="text-[10px] text-blue-400 font-bold mt-1">Por loja ativa</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-tighter mb-1">Novas / Pendentes</p>
+                  <p className="text-3xl font-black text-white">
+                    {saasMetrics?.pendingTrial || 0}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-bold mt-1">Aguardando ativação</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Global Operations Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[
               {
-                label: 'Receita Total (Pago)',
+                label: 'Volume Total de Venda (GMV)',
                 value: `R$ ${(metrics?.totalRevenue || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`,
                 icon: DollarSign,
                 color: 'from-emerald-500 to-teal-600',
-                shadow: 'shadow-emerald-200'
+                shadow: 'shadow-emerald-100'
               },
               {
-                label: 'Total de Pedidos',
+                label: 'Pedidos Realizados',
                 value: metrics?.totalOrders?.toString() || '0',
                 icon: ShoppingBag,
                 color: 'from-blue-500 to-indigo-600',
-                shadow: 'shadow-blue-200'
+                shadow: 'shadow-blue-100'
               },
               {
-                label: 'Organizações Ativas',
+                label: 'Total de Lojas',
                 value: metrics?.totalOrgs?.toString() || '0',
                 icon: Store,
                 color: 'from-purple-500 to-pink-600',
-                shadow: 'shadow-purple-200'
+                shadow: 'shadow-purple-100'
               }
             ].map(metric => {
               const Icon = metric.icon;
@@ -6630,13 +6936,13 @@ const SuperAdminPage = () => {
                   key={metric.label}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="premium-card p-6"
+                  className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm"
                 >
-                  <div className={cn("w-12 h-12 bg-gradient-to-br rounded-2xl flex items-center justify-center mb-4 shadow-lg", metric.color, metric.shadow)}>
-                    <Icon size={22} className="text-white" />
+                  <div className={cn("w-10 h-10 bg-gradient-to-br rounded-xl flex items-center justify-center mb-3", metric.color)}>
+                    <Icon size={18} className="text-white" />
                   </div>
-                  <p className="text-3xl font-black text-slate-900 mb-1">{metric.value}</p>
-                  <p className="text-sm text-slate-400 font-medium uppercase tracking-wider">{metric.label}</p>
+                  <p className="text-2xl font-black text-slate-900 mb-0.5">{metric.value}</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{metric.label}</p>
                 </motion.div>
               );
             })}
@@ -6661,8 +6967,16 @@ const SuperAdminPage = () => {
                     <p className="font-bold text-slate-800 truncate">{org.name}</p>
                     <p className="text-xs text-slate-400">/{org.slug}{org.custom_domain ? ` • ${org.custom_domain}` : ''}</p>
                   </div>
-                  <div className="bg-emerald-100 px-2 py-1 rounded-lg">
-                    <span className="text-[10px] font-bold text-emerald-700 uppercase">Ativo</span>
+                  <div className="flex flex-col gap-1 items-end">
+                    <span className="bg-gray-800 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">
+                      {org.plan === 'starter' ? 'Starter' : org.plan === 'premium' ? 'Premium' : org.plan === 'pro' ? 'Pro' : 'Pro'}
+                    </span>
+                    <span className={cn(
+                      "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                      org.status === 'suspended' ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-700'
+                    )}>
+                      {org.status === 'suspended' ? 'Suspenso' : 'Ativo'}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -6737,7 +7051,7 @@ const SuperAdminPage = () => {
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h3 className="font-black text-slate-900 text-lg">{org.name}</h3>
                         <span className="bg-slate-800 text-white text-[10px] font-bold px-2 py-0.5 rounded-full uppercase shadow-sm">
-                          {org.plan || 'Básico'}
+                          {org.plan === 'starter' ? 'Básico' : org.plan === 'pro' ? 'Profissional' : org.plan === 'premium' ? 'Enterprise' : 'Básico'}
                         </span>
                         <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full uppercase", statusColors[orgStatus as keyof typeof statusColors])}>
                           {statusLabels[orgStatus as keyof typeof statusLabels]}
