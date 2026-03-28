@@ -14,8 +14,10 @@ import {
   CreditCard,
   Banknote,
   Phone,
-  User
+  User,
+  ArrowLeft
 } from 'lucide-react';
+import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { useTenant } from "../context/TenantContext";
 import { socket, supabase } from "../supabase";
@@ -188,9 +190,16 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
               <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{user?.name || 'Motorista Parceiro'}</p>
             </div>
           </div>
-          <button onClick={onLogout} aria-label="Sair" className="w-12 h-12 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-red-500/10 hover:border-red-500/20 transition-all group">
-            <LogOut size={20} className="text-slate-500 group-hover:text-red-500 transition-colors" />
-          </button>
+          <div className="flex items-center gap-2">
+            {(user?.role === 'admin' || user?.role === 'super_admin') && (
+              <Link to="/admin" aria-label="Voltar ao Painel" className="w-12 h-12 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-white/10 hover:border-white/20 transition-all group">
+                <ArrowLeft size={20} className="text-slate-500 group-hover:text-white transition-colors" />
+              </Link>
+            )}
+            <button onClick={onLogout} aria-label="Sair" className="w-12 h-12 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-red-500/10 hover:border-red-500/20 transition-all group">
+              <LogOut size={20} className="text-slate-500 group-hover:text-red-500 transition-colors" />
+            </button>
+          </div>
         </header>
 
         {/* Online Toggle Card */}

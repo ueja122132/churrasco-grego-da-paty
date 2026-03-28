@@ -169,7 +169,7 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
   const deliveryOrders = orders.filter(o => o.status === 'ready' || o.status === 'shipped');
 
   return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-5xl mx-auto">
+    <div className="md:pt-8 p-4 max-w-5xl mx-auto">
       <header className="mb-10">
         <h1 className="text-5xl font-black text-indigo-600 uppercase tracking-tighter flex items-center gap-3 italic">
           <Truck size={48} />
@@ -282,8 +282,9 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
               <h3 className="text-2xl font-black text-gray-900 mb-6 flex items-center gap-2"><Truck className="text-orange-600" /> Despachar Pedido</h3>
               <div className="space-y-6">
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Entregador</label>
+                  <label id="courier-select-label" className="block text-xs font-bold text-gray-400 uppercase mb-2">Selecionar Entregador</label>
                   <select
+                    aria-labelledby="courier-select-label"
                     value={selectedCourierId}
                     onChange={e => setSelectedCourierId(e.target.value)}
                     className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-bold"
@@ -293,10 +294,12 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Taxa de Entrega (Comissão R$)</label>
+                  <label htmlFor="delivery-fee-input" className="block text-xs font-bold text-gray-400 uppercase mb-2">Taxa de Entrega (Comissão R$)</label>
                   <input
+                    id="delivery-fee-input"
                     type="number"
                     step="0.10"
+                    placeholder="0.00"
                     value={deliveryFee}
                     onChange={e => setDeliveryFee(e.target.value)}
                     className="w-full px-4 py-4 bg-gray-50 border-2 border-gray-100 rounded-2xl outline-none focus:border-orange-500 font-mono text-xl font-black"
@@ -334,6 +337,8 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
                 <button
                   onClick={() => setShowQrModal(null)}
                   className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                  aria-label="Fechar Modal"
+                  title="Fechar"
                 >
                   <X size={20} />
                 </button>

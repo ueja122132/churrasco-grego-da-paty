@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { 
   DollarSign, 
   Plus, 
@@ -25,6 +26,8 @@ import { cn } from "../lib/utils";
 export const FinancePage = () => {
   const { org } = useTenant();
   const { notify } = useNotification();
+  const location = useLocation();
+  const isNested = location.pathname === '/admin';
   
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'simulator' | 'recipe'>('dashboard');
   const [orders, setOrders] = useState<Order[]>([]);
@@ -326,39 +329,58 @@ export const FinancePage = () => {
   if (loading) return <div className="p-8 text-center text-gray-400">Carregando dados financeiros...</div>;
 
   return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-6xl mx-auto min-h-screen">
-      <header className="mb-8">
-        <h1 className="text-4xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-          <DollarSign size={40} className="text-orange-600" />
-          Financeiro & Precificação
-        </h1>
-        <div className="flex gap-2 mt-6 overflow-x-auto pb-2 noscrollbar">
-          <button 
-            onClick={() => setActiveTab('dashboard')}
-            className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'dashboard' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
-          >
-            <TrendingUp size={18} /> Dashboard
-          </button>
-          <button 
-            onClick={() => setActiveTab('inventory')}
-            className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'inventory' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
-          >
-            <Package size={18} /> Inventário
-          </button>
-          <button 
-            onClick={() => setActiveTab('recipe')}
-            className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'recipe' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
-          >
-            <Layers size={18} /> Ficha Técnica
-          </button>
-          <button 
-            onClick={() => setActiveTab('simulator')}
-            className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'simulator' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
-          >
-            <Calculator size={18} /> Simulador
-          </button>
+    <div className={cn(
+      "max-w-6xl mx-auto",
+      !isNested && "pb-8 md:pt-8 p-4 min-h-screen"
+    )}>
+      {!isNested && (
+        <header className="mb-8">
+          <h1 className="text-4xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+            <DollarSign size={40} className="text-orange-600" />
+            Financeiro & Precificação
+          </h1>
+          <div className="flex gap-2 mt-6 overflow-x-auto pb-2 noscrollbar">
+            {/* Tabs are kept below */}
+          </div>
+        </header>
+      )}
+
+      {/* Tabs navigation for Finance (always show unless you want Admin to control it) */}
+      <div className={cn("flex gap-2 overflow-x-auto pb-2 noscrollbar", isNested ? "mb-6" : "hidden")}>
+        <button 
+          onClick={() => setActiveTab('dashboard')}
+          className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'dashboard' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
+        >
+          <TrendingUp size={18} /> Dashboard
+        </button>
+        <button 
+          onClick={() => setActiveTab('inventory')}
+          className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'inventory' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
+        >
+          <Package size={18} /> Inventário
+        </button>
+        <button 
+          onClick={() => setActiveTab('recipe')}
+          className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'recipe' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
+        >
+          <Layers size={18} /> Ficha Técnica
+        </button>
+        <button 
+          onClick={() => setActiveTab('simulator')}
+          className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'simulator' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
+        >
+          <Calculator size={18} /> Simulador
+        </button>
+      </div>
+
+      {!isNested && (
+        <div className="flex gap-2 mb-6 overflow-x-auto pb-2 noscrollbar">
+            <button onClick={() => setActiveTab('dashboard')} className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'dashboard' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}><TrendingUp size={18} /> Dashboard</button>
+            <button onClick={() => setActiveTab('inventory')} className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'inventory' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}><Package size={18} /> Inventário</button>
+            <button onClick={() => setActiveTab('recipe')} className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'recipe' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}><Layers size={18} /> Ficha Técnica</button>
+            <button onClick={() => setActiveTab('simulator')} className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'simulator' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}><Calculator size={18} /> Simulador</button>
         </div>
-      </header>
+      )}
 
       {/* DASHBOARD TAB */}
       {activeTab === 'dashboard' && (

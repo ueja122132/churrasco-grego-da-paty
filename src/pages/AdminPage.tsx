@@ -534,7 +534,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const currentPlanObj = SAAS_PLANS.find(p => p.id === selectedPlanId) || SAAS_PLANS[0];
 
   return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4">
+    <div className="md:pt-8 p-4 max-w-7xl mx-auto">
       <header className="mb-10">
         <h1 className="text-5xl font-extrabold text-slate-900 tracking-tight flex items-center gap-4">
           <div className="w-14 h-14 bg-brand-primary/10 rounded-2xl flex items-center justify-center shadow-glow">

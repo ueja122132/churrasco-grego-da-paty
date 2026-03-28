@@ -174,7 +174,7 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
   });
 
   return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4 max-w-5xl mx-auto">
+    <div className="md:pt-8 p-4 max-w-5xl mx-auto">
       <header className="mb-10 flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="text-center md:text-left">
           <h1 className="text-5xl font-black text-gradient uppercase tracking-tighter flex items-center justify-center md:justify-start gap-3">

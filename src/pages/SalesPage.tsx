@@ -442,7 +442,7 @@ export const SalesPage = () => {
   };
 
   return (
-    <div className="pb-24 md:pt-8 p-4 max-w-7xl mx-auto">
+    <div className="md:pt-8 p-4 max-w-7xl mx-auto">
       <header className="mb-10 text-center md:text-left flex flex-col md:flex-row items-center gap-6">
         {org?.branding.logoUrl ? (
           <img src={org.branding.logoUrl} alt={org.name} className="w-24 h-24 rounded-3xl shadow-lg object-cover border-4 border-white" />

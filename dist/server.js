@@ -984,7 +984,7 @@ async function startServer() {
             }
             const appUrl = (process.env.VITE_APP_URL && process.env.VITE_APP_URL.length > 5)
                 ? process.env.VITE_APP_URL
-                : 'https://churrascogregodapaty.com';
+                : `https://${req.get('host')}`;
             const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
                 method: "POST",
                 headers: {

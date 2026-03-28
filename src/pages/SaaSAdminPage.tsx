@@ -91,7 +91,7 @@ export const SaaSAdminPage: React.FC<SaaSAdminPageProps> = ({ user, notify }) =>
   );
 
   return (
-    <div className="pb-24 md:pl-24 md:pt-8 p-4 bg-slate-50 min-h-screen">
+    <div className="pb-24 md:pt-8 p-4 bg-slate-50 min-h-screen max-w-7xl mx-auto">
       <header className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-4xl font-black text-slate-900 tracking-tight flex items-center gap-3">
@@ -193,7 +193,7 @@ export const SaaSAdminPage: React.FC<SaaSAdminPageProps> = ({ user, notify }) =>
                     <p className="text-xs font-bold text-slate-500">{new Date(org.created_at).toLocaleDateString('pt-BR')}</p>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button onClick={() => deleteOrg(org.id)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all">
+                    <button onClick={() => deleteOrg(org.id)} className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all" aria-label="Excluir Organização" title="Excluir">
                       <Trash2 size={18} />
                     </button>
                   </td>

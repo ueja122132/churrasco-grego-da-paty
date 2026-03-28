@@ -4,7 +4,7 @@ import { createServer as createHttpServer } from "http";
 import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
-import path from "path";
+import path, { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -13,12 +13,13 @@ import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import dns from "dns/promises";
 import cron from "node-cron";
+import compression from "compression";
 
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname = dirname(__filename);
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
@@ -59,7 +60,7 @@ async function startServer() {
     }
     next();
   });
-
+  app.use(compression());
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -1078,7 +1079,7 @@ async function startServer() {
 
       const appUrl = (process.env.VITE_APP_URL && process.env.VITE_APP_URL.length > 5)
         ? process.env.VITE_APP_URL
-        : 'https://churrascogregodapaty.com';
+        : `https://${req.get('host')}`;
 
       const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
         method: "POST",

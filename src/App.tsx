@@ -52,13 +52,13 @@ const AppContent = () => {
 
   if (loading) return <LoadingScreen />;
 
-  const hideNavbar = ['/login', '/register', '/start'].includes(location.pathname) || !user;
+  const hideNavbar = ['/login', '/register', '/start', '/courier'].includes(location.pathname) || !user;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
       {!hideNavbar && <Navbar />}
       
-      <main className={cn("flex-1 md:pb-0", hideNavbar && "md:pl-0")}>
+      <main className={cn("flex-1 pb-24 md:pb-0 transition-all", hideNavbar ? "md:pl-0" : "md:pl-24")}>
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
             {/* Public Routes */}
