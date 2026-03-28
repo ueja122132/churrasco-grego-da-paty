@@ -1111,6 +1111,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
                     <button onClick={handlePayout} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black shadow-lg">Confirmar Pagamento</button>
                   </div>
                 )}
+
+                {modalType === 'delete_courier' && selectedCourier && (
+                  <div className="space-y-6 text-center">
+                    <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-2 text-red-600">
+                      <Trash2 size={32} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-gray-800 text-lg">Remover Entregador</h4>
+                      <p className="text-gray-500 text-sm mt-1">
+                        Tem certeza que deseja excluir <strong>{selectedCourier.name}</strong>?
+                        Esta ação não pode ser desfeita.
+                      </p>
+                    </div>
+                    <div className="flex gap-4 pt-2">
+                       <button onClick={() => setModalType(null)} className="flex-1 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl hover:bg-gray-200 transition">Cancelar</button>
+                       <button 
+                         onClick={() => {
+                           deleteCourier(selectedCourier.id);
+                           setModalType(null);
+                         }} 
+                         className="flex-1 py-4 bg-red-600 text-white font-bold rounded-2xl shadow-lg hover:bg-red-700 transition"
+                       >
+                         Sim, Excluir
+                       </button>
+                    </div>
+                  </div>
+                )}
              </motion.div>
           </div>
         )}
