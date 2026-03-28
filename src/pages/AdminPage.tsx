@@ -359,14 +359,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   };
 
   const deleteCourier = async (id: string | number) => {
+    console.log(`[FRONTEND] Deleting courier: ${id}`);
     try {
       const res = await fetch(`/api/couriers/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      
       if (res.ok) {
+        console.log(`[FRONTEND] Deleted: ${id}`, data);
         notify("Entregador removido", "success");
         fetchData();
+      } else {
+        console.error(`[FRONTEND-DELETE-FAIL] ${id}:`, data);
+        notify(data.error || "Erro ao excluir", "error");
       }
     } catch (err) {
-      notify("Erro ao excluir", "error");
+      console.error(`[FRONTEND-DELETE-FATAL] ${id}:`, err);
+      notify("Erro de conexão ao excluir", "error");
     }
   };
 

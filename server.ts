@@ -2094,10 +2094,20 @@ Diretrizes:
   });
 
   app.delete("/api/couriers/:id", async (req, res) => {
-    const { error } = await supabase.rpc('admin_delete_profile', { user_id: req.params.id });
-
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true });
+    const { id } = req.params;
+    console.log(`[BACKEND] Deleting Courier Profile: ${id}`);
+    try {
+      const { error } = await supabase.rpc('admin_delete_profile', { user_id: id });
+      if (error) {
+        console.error(`[BACKEND-DELETE-ERROR] RPC Failed for ${id}:`, error);
+        return res.status(500).json({ error: error.message });
+      }
+      console.log(`[BACKEND] Successfully deleted courier: ${id}`);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error(`[BACKEND-DELETE-FATAL] ${id}:`, err);
+      res.status(500).json({ error: "Erro interno ao excluir" });
+    }
   });
 
   app.patch("/api/orders/:id/courier", async (req, res) => {
