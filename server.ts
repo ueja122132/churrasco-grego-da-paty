@@ -2097,7 +2097,7 @@ Diretrizes:
     const { id } = req.params;
     console.log(`[BACKEND] Deleting Courier Profile: ${id}`);
     try {
-      const { error } = await supabase.rpc('admin_delete_profile', { user_id: id });
+      const { error } = await supabase.rpc('admin_delete_profile', { user_id_p: id });
       if (error) {
         console.error(`[BACKEND-DELETE-ERROR] RPC Failed for ${id}:`, error);
         return res.status(500).json({ error: error.message });
