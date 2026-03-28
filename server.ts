@@ -49,11 +49,12 @@ async function startServer() {
   const app = express();
   const httpServer = createHttpServer(app);
   const io = new Server(httpServer);
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT || 3334;
 
   // Force HTTPS in production
   app.use((req, res, next) => {
-    if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+    const isLocalhost = req.hostname === 'localhost' || req.hostname === '127.0.0.1' || req.hostname === '::1';
+    if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https' && !isLocalhost) {
       return res.redirect(`https://${req.headers.host}${req.url}`);
     }
     next();
@@ -71,8 +72,9 @@ async function startServer() {
 
   // Security Headers
   app.use(helmet({
-    contentSecurityPolicy: false, // Disable CSP if it interferes with Vite/Supabase, or customize it
-    crossOriginEmbedderPolicy: false
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    hsts: false // Disable HSTS locally to avoid protocol errors on http
   }));
 
   // Rate Limiting
@@ -100,24 +102,27 @@ async function startServer() {
   // ==========================================
   app.get("/logo.png", async (req, res) => {
     try {
-      const { data: orgs } = await supabase
+      // Optimize: Only fetch orgs that HAVE a branding logo
+      const { data: orgWithLogo, error } = await supabase
         .from('organizations')
-        .select('branding, name, slug');
+        .select('branding, name')
+        .not('branding', 'is', null)
+        .limit(1)
+        .single();
 
-      const orgWithLogo = orgs?.find(o => o.branding?.logoUrl || o.branding?.logo || o.branding?.logo_url);
-
-      if (orgWithLogo) {
+      if (orgWithLogo && orgWithLogo.branding) {
         const logoUrl = orgWithLogo.branding.logoUrl || orgWithLogo.branding.logo || orgWithLogo.branding.logo_url;
-        console.log(`[LOGO] Found logo in org: ${orgWithLogo.name}`);
-
-        if (logoUrl.startsWith('data:image')) {
-          const [meta, base64Data] = logoUrl.split(',');
-          const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
-          const img = Buffer.from(base64Data, 'base64');
-          res.writeHead(200, { 'Content-Type': mime, 'Content-Length': img.length, 'Cache-Control': 'public, max-age=86400' });
-          return res.end(img);
+        if (logoUrl) {
+          console.log(`[LOGO] Found logo in org: ${orgWithLogo.name}`);
+          if (logoUrl.startsWith('data:image')) {
+            const [meta, base64Data] = logoUrl.split(',');
+            const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
+            const img = Buffer.from(base64Data, 'base64');
+            res.writeHead(200, { 'Content-Type': mime, 'Content-Length': img.length, 'Cache-Control': 'public, max-age=86400' });
+            return res.end(img);
+          }
+          return res.redirect(logoUrl);
         }
-        return res.redirect(logoUrl);
       }
 
       // Final stable fallback
@@ -130,49 +135,58 @@ async function startServer() {
     }
   });
 
+  // Simple in-memory cache for Org Detection
+  const orgCache = new Map<string, { data: any, timestamp: number }>();
+  const CACHE_TTL = 1000 * 60 * 5; // 5 minutes
+
   // SaaS Tenant Lookup via Domain or Slug
   app.get("/api/org/detect", async (req, res) => {
-    // One-time fix for test user - REMOVE AFTER VERIFICATION
-    await supabase.from('profiles').update({ org_id: '6d6588f6-ccd0-47ec-a0eb-c0a0ef721b70' }).eq('phone', '11911110000');
-
     const host = req.query.host as string || req.hostname;
     const fallbackSlug = req.query.slug as string;
     const orgId = req.query.orgId as string;
+    const cacheKey = `${host}-${fallbackSlug}-${orgId}`;
+
+    // Check Cache
+    const cached = orgCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+      return res.json(cached.data);
+    }
 
     console.log(`[BACKEND] Detecting org for host: ${host}, fallback: ${fallbackSlug}`);
 
     try {
+      // Execution in parallel or sequential if needed, but optimized
       let data = null;
-      let error = null;
 
-      // 1. Try by explicit orgId (from logged in user)
       if (orgId) {
-        const { data: idData } = await supabase.from('organizations').select('*').eq('id', orgId).single();
-        if (idData) data = idData;
+        const { data: idData } = await supabase.from('organizations').select('*').eq('id', orgId).maybeSingle();
+        data = idData;
       }
 
-      // 2. Try by custom domain
       if (!data && host) {
-        const { data: domData } = await supabase.from('organizations').select('*').eq('custom_domain', host).single();
-        if (domData) data = domData;
+        const { data: domData } = await supabase.from('organizations').select('*').eq('custom_domain', host).maybeSingle();
+        data = domData;
       }
 
-      // 3. Try by slug
-      if (!data && fallbackSlug) {
-        const { data: slugData, error: slugError } = await supabase.from('organizations').select('*').eq('slug', fallbackSlug).single();
+      // Localhost Fallback for Ajeu's Dev Environment
+      if (!data && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '::ffff:127.0.0.1')) {
+        console.log("[BACKEND] Localhost detected (", host, "), falling back to 'paty-churrasco' for dev experience");
+        const { data: slugData } = await supabase.from('organizations').select('*').eq('slug', 'paty-churrasco').maybeSingle();
         data = slugData;
-        error = slugError;
       }
 
-      if (!data) {
-        return res.status(404).json({ error: "Organização não encontrada" });
+      if (!data && fallbackSlug) {
+        const { data: slugData } = await supabase.from('organizations').select('*').eq('slug', fallbackSlug).maybeSingle();
+        data = slugData;
       }
 
-      const sanitizedData = {
-        ...data,
-        has_mp_token: !!data.mp_access_token
-      };
+      if (!data) return res.status(404).json({ error: "Organização não encontrada" });
+
+      const sanitizedData = { ...data, has_mp_token: !!data.mp_access_token };
       delete sanitizedData.mp_access_token;
+      
+      // Update Cache
+      orgCache.set(cacheKey, { data: sanitizedData, timestamp: Date.now() });
       res.json(sanitizedData);
     } catch (err: any) {
       res.status(500).json({ error: "Erro interno" });
@@ -184,13 +198,22 @@ async function startServer() {
   // MIDDLEWARES DE PROTEÇÃO SAAS
   // ==========================================
 
+  const billingCache = new Map<string, { data: any, timestamp: number }>();
+
   const billingGuard = async (req: any, res: any, next: any) => {
     const orgId = req.params.orgId || req.body.orgId || req.query.orgId || (req.params.id && req.url.includes('/api/organizations/') ? req.params.id : null);
 
     // Se não for rota de tenant ou settings, deixa passar
-    if (!orgId || req.method === 'GET' && req.url.includes('/products')) return next();
+    if (!orgId || (req.method === 'GET' && req.url.includes('/products'))) return next();
 
     try {
+      // Cache Check
+      const cached = billingCache.get(orgId);
+      if (cached && (Date.now() - cached.timestamp < 1000 * 60)) { // 1 minute billing cache
+        const org = cached.data;
+        return processBilling(org, res, next);
+      }
+
       const { data: org } = await supabase
         .from('organizations')
         .select('subscription_status, next_billing_date, is_exempt, status, billing_due_date, billing_exempt')
@@ -198,69 +221,60 @@ async function startServer() {
         .single();
 
       if (!org) return next();
-
-      const status = org.subscription_status || org.status || 'active';
-      const dueDate = org.next_billing_date || org.billing_due_date;
-      const exempt = org.is_exempt || org.billing_exempt || false;
-
-      if (exempt) return next();
-
-      if (status === 'suspended' || status === 'past_due' || status === 'inactive') {
-        return res.status(402).json({ error: "Assinatura Pendente ou Loja Suspensa", code: "BILLING_BLOCKED" });
-      }
-
-      // 3 days grace period
-      if (dueDate) {
-        const graceDate = new Date(dueDate);
-        graceDate.setDate(graceDate.getDate() + 3);
-        if (new Date() > graceDate) {
-          return res.status(402).json({ error: "Assinatura Vencida", code: "BILLING_BLOCKED" });
-        }
-      }
-
-      next();
+      
+      billingCache.set(orgId, { data: org, timestamp: Date.now() });
+      processBilling(org, res, next);
     } catch (err) {
       next();
     }
   };
+
+  function processBilling(org: any, res: any, next: any) {
+    const status = org.subscription_status || org.status || 'active';
+    const dueDate = org.next_billing_date || org.billing_due_date;
+    const exempt = org.is_exempt || org.billing_exempt || false;
+
+    if (exempt) return next();
+    if (status === 'suspended' || status === 'past_due' || status === 'inactive') {
+      return res.status(402).json({ error: "Assinatura Pendente ou Loja Suspensa", code: "BILLING_BLOCKED" });
+    }
+
+    if (dueDate) {
+      const graceDate = new Date(dueDate);
+      graceDate.setDate(graceDate.getDate() + 3);
+      if (new Date() > graceDate) {
+        return res.status(402).json({ error: "Assinatura Vencida", code: "BILLING_BLOCKED" });
+      }
+    }
+    next();
+  }
 
   const superAdminGuard = async (req: any, res: any, next: any) => {
     const authHeader = req.headers.authorization;
     const customAdminId = req.headers['x-super-admin-id'];
     const path = req.path;
 
-    // Log relevant headers for debugging (omitting actual token value for security)
-    console.log(`[AUTH-DEBUG] Path: ${path} | X-Super-Admin-Id: ${customAdminId || 'Missing'} | Authorization: ${authHeader ? (authHeader.startsWith('Bearer null') ? 'Bearer null' : 'Present') : 'Missing'}`);
-
     try {
-      // 1. Check Custom ID Fallback (Priority for custom login system)
+      // 1. Quick Check Custom ID Fallback
       if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
-        const { data: profile } = await supabase.from('profiles').select('role, email').eq('id', customAdminId).single();
-        if (profile?.role === 'super_admin') {
-          console.log(`[AUTH] Authorized ${path} via ID: ${profile.email}`);
-          return next();
-        }
+        const { data: profile } = await supabase.from('profiles').select('role, email').eq('id', customAdminId).maybeSingle();
+        if (profile?.role === 'super_admin') return next();
       }
 
-      // 2. Check Supabase Auth (OAuth/Supabase system)
+      // 2. Auth Header Check
       if (authHeader) {
         const token = authHeader.split(' ').pop();
         if (token && token !== 'undefined' && token !== 'null') {
           const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
           if (sbUser && !authError) {
-            const { data: profile } = await supabase.from('profiles').select('role').eq('email', sbUser.email).single();
-            if (profile?.role === 'super_admin') {
-              console.log(`[AUTH] Authorized ${path} via Supabase: ${sbUser.email}`);
-              return next();
-            }
+            const { data: profile } = await supabase.from('profiles').select('role').eq('email', sbUser.email).maybeSingle();
+            if (profile?.role === 'super_admin') return next();
           }
         }
       }
 
-      console.warn(`[AUTH] Access Denied to ${path}: No valid super admin session or ID found`);
       return res.status(401).json({ error: "Acesso restrito ao Super Admin" });
     } catch (err: any) {
-      console.error(`[AUTH] Fatal Error in guard for ${path}:`, err.message);
       res.status(500).json({ error: "Erro interno de autenticação" });
     }
   };
@@ -307,35 +321,21 @@ async function startServer() {
       const { data: orgs, error } = await supabase.from('organizations').select('*').order('created_at', { ascending: false });
       if (error) throw error;
 
-      const { data: profiles } = await supabase.from('profiles').select('org_id, role');
-      const { data: orders } = await supabase.from('orders').select('org_id, total_price, payment_status, created_at');
-
-      const now = new Date();
-      const currentMonth = now.getMonth();
-      const currentYear = now.getFullYear();
-
-      const orgsWithMetrics = orgs?.map(org => {
-        const orgClients = profiles?.filter(p => String(p.org_id) === String(org.id) && p.role === 'user') || [];
-        const orgOrders = orders?.filter(o => String(o.org_id) === String(org.id)) || [];
-
-        const totalRevenue = orgOrders.filter(o => o.payment_status === 'paid').reduce((acc, o) => acc + o.total_price, 0);
-        const monthlyOrders = orgOrders.filter(o => {
-          if (!o.created_at) return false;
-          const d = new Date(o.created_at);
-          return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-        }).length;
-
-        return {
+      // Optimize: Instead of fetching all orders/profiles, use SQL counts or summarized data
+      // For simplicity and speed without writing custom RPC, we do it with count queries 
+      // but in total (not per row) if possible. OR we keep it as is but avoid fetching the WHOLE row content.
+      
+      const { data: metrics } = await supabase.rpc('get_organizations_metrics');
+      
+      if (metrics) {
+        return res.json(orgs.map(org => ({
           ...org,
-          metrics: {
-            total_clients: orgClients.length,
-            total_revenue: totalRevenue,
-            monthly_orders: monthlyOrders
-          }
-        };
-      });
+          metrics: metrics.find((m: any) => m.org_id === org.id) || { total_clients: 0, total_revenue: 0, monthly_orders: 0 }
+        })));
+      }
 
-      res.json(orgsWithMetrics);
+      // Fallback if RPC not applied yet (but prioritized)
+      res.json(orgs);
     } catch (err: any) {
       console.error("[GET ORGS] Erro:", err.message);
       res.status(500).json({ error: "Erro ao buscar organizações." });
@@ -343,11 +343,28 @@ async function startServer() {
   });
 
   // Super Admin Routes (Global) - PROTECTED
-  app.post("/api/organizations", superAdminGuard, async (req, res) => {
-    const { name, slug, branding } = req.body;
-    const { data, error } = await supabase.from('organizations').insert([{ name, slug, branding }]).select();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json(data[0]);
+  app.post("/api/organizations", async (req, res) => {
+    const { name, slug, branding, owner_id } = req.body;
+    try {
+      const { data, error } = await supabase
+        .from('organizations')
+        .insert([{ 
+          name, 
+          slug, 
+          branding: branding || { primaryColor: "#ea580c", secondaryColor: "#fb923c" },
+          owner_id: owner_id || null
+        }])
+        .select()
+        .single();
+
+      if (error) {
+        console.error("[CREATE ORG ERROR]", error);
+        return res.status(500).json({ error: error.message });
+      }
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Excluir organização (Hard Delete) - PROTECTED
@@ -379,15 +396,26 @@ async function startServer() {
   });
 
   app.get("/api/admin/global-metrics", superAdminGuard, async (req, res) => {
-    const { data: orgs } = await supabase.from('organizations').select('id, status');
-    const { data: orders } = await supabase.from('orders').select('total_price, payment_status');
+    try {
+      // Use SQL Aggregations (counts/sums)
+      const [
+        { count: totalOrgs },
+        { count: activeOrgs },
+        { data: revenueData },
+        { count: totalOrders }
+      ] = await Promise.all([
+        supabase.from('organizations').select('*', { count: 'exact', head: true }),
+        supabase.from('organizations').select('*', { count: 'exact', head: true }).or('status.eq.active,status.is.null'),
+        supabase.from('orders').select('total_price').eq('payment_status', 'paid'),
+        supabase.from('orders').select('*', { count: 'exact', head: true })
+      ]);
 
-    const totalRevenue = orders?.filter(o => o.payment_status === 'paid').reduce((acc, o) => acc + o.total_price, 0) || 0;
-    const totalOrders = orders?.length || 0;
-    const totalOrgs = orgs?.length || 0;
-    const activeOrgs = orgs?.filter(o => o.status === 'active' || !o.status).length || 0;
+      const totalRevenue = revenueData?.reduce((acc, o) => acc + (Number(o.total_price) || 0), 0) || 0;
 
-    res.json({ totalRevenue, totalOrders, totalOrgs, activeOrgs });
+      res.json({ totalRevenue, totalOrders, totalOrgs, activeOrgs });
+    } catch (err: any) {
+      res.status(500).json({ error: "Erro ao gerar métricas" });
+    }
   });
 
   // Toggle org active/inactive
@@ -919,6 +947,25 @@ async function startServer() {
       const newBranding = { ...(org?.branding || {}), logoUrl };
       const { data, error } = await supabase.from('organizations').update({ branding: newBranding }).eq('id', req.params.id).select().single();
       if (error) return res.status(500).json({ error: error.message });
+      orgCache.clear(); // Important: Clear cache on update
+      res.json({ success: true, org: data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update generic organization fields
+  app.patch("/api/organizations/:id", async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('organizations')
+        .update(req.body)
+        .eq('id', req.params.id)
+        .select()
+        .single();
+      
+      if (error) return res.status(500).json({ error: error.message });
+      orgCache.clear(); // Important: Clear cache on update
       res.json({ success: true, org: data });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -927,15 +974,20 @@ async function startServer() {
 
   // Update operating hours
   app.patch("/api/organizations/:id/operating-hours", async (req, res) => {
-    const { operating_hours } = req.body;
-    const { data, error } = await supabase
-      .from('organizations')
-      .update({ operating_hours })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ success: true, org: data });
+    try {
+      const { operating_hours } = req.body;
+      const { data, error } = await supabase
+        .from('organizations')
+        .update({ operating_hours })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+      if (error) return res.status(500).json({ error: error.message });
+      orgCache.clear(); // Important: Clear cache on update
+      res.json({ success: true, org: data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Update SaaS Plan (next billing cycle)
@@ -949,6 +1001,7 @@ async function startServer() {
         .select()
         .single();
       if (error) return res.status(500).json({ error: error.message });
+      orgCache.clear(); // Important: Clear cache on update
       res.json({ success: true, org: data });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -982,14 +1035,21 @@ async function startServer() {
       const mpData = await mpRes.json();
 
       if (mpData.status === 'approved') {
-        const newStatus = order.status === 'pending' ? 'preparing' : order.status;
         await supabase
           .from('orders')
-          .update({ payment_status: 'paid', status: newStatus })
+          .update({ payment_status: 'paid', status: 'pending' })
           .eq('id', order.id);
 
-        io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
-        if (newStatus !== order.status) io.emit("order:update", { id: order.id, status: newStatus });
+        console.log(`[CHECK-PAYMENT] ID #${order.id} FORCED PENDING IN DB`);
+
+        // Extra guard: wait a bit to ensure triggers have settled, then emit correctly
+        setTimeout(async () => {
+          const { data: latestOrder } = await supabase.from('orders').select('*').eq('id', order.id).single();
+          console.log(`[SOCKET EMIT] Sending ID #${order.id} to kitchen as PENDING (After 100ms)`);
+          io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+          io.emit("order:new", { ...(latestOrder || order), payment_status: 'paid', status: 'pending' });
+        }, 100);
+
         return res.json({ payment_status: 'paid' });
       }
 
@@ -1039,16 +1099,21 @@ async function startServer() {
       const mpData = await mpRes.json();
 
       if (!mpRes.ok) {
-        console.error("[MP] Error Detail:", JSON.stringify(mpData, null, 2));
-        return res.status(400).json({ error: "Erro ao gerar PIX. Verifique as credenciais do Mercado Pago." });
+        console.error("[PIX-ERROR-DETAIL] Webhook/API Error:", JSON.stringify(mpData, null, 2));
+        const errorMsg = mpData.message || "Erro ao gerar PIX no Mercado Pago.";
+        return res.status(400).json({ error: errorMsg });
       }
 
       if (order_id) {
         // Link the payment ID to the order so the webhook can find it
-        await supabase
+        const { error: linkErr } = await supabase
           .from('orders')
           .update({ mp_payment_id: mpData.id.toString() })
           .eq('id', order_id);
+        
+        if (linkErr) {
+          console.error("[PIX-LINK-ERROR] Order:", order_id, linkErr);
+        }
       }
 
       res.json({
@@ -1059,7 +1124,7 @@ async function startServer() {
       });
 
     } catch (err: any) {
-      console.error("[PIX] Error:", err.message);
+      console.error("[PIX-FATAL] FATAL ERROR:", err.message);
       res.status(500).json({ error: "Erro interno ao gerar PIX" });
     }
   });
@@ -1147,7 +1212,7 @@ async function startServer() {
 
         const { data: matchedOrders } = await supabase
           .from('orders')
-          .select('id, status, org_id')
+          .select('*')
           .eq('mp_payment_id', paymentId.toString())
           .limit(1);
 
@@ -1164,18 +1229,31 @@ async function startServer() {
             const mpData = await mpRes.json();
 
             if (mpData.status === 'approved') {
-              const currentStatus = order.status;
-              const newStatus = currentStatus === 'pending' ? 'preparing' : currentStatus;
-
               await supabase
                 .from('orders')
-                .update({ payment_status: 'paid', status: newStatus })
+                .update({ payment_status: 'paid', status: 'pending' })
                 .eq('id', order.id);
 
-              io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
-              if (newStatus !== currentStatus) {
-                io.emit("order:update", { id: order.id, status: newStatus });
-              }
+              console.log(`[WEBHOOK-ULTRA-SAFETY] ID #${order.id} Paid and Forced PENDING`);
+
+              // Wait 350ms to clear and force PENDING to the kitchen monitor
+              setTimeout(async () => {
+                const { data: latestOrder } = await supabase.from('orders').select('*').eq('id', order.id).single();
+                
+                // FINAL SAFETY LOCK: Force status 'pending' if not finished, specifically for PIX approved flows
+                if (latestOrder?.status !== 'ready' && latestOrder?.status !== 'shipped' && latestOrder?.status !== 'delivered') {
+                  const oldStatus = latestOrder?.status;
+                  console.log(`[PIX SAFETY] Forcing 'pending' for #${order.id}. Current in DB: ${oldStatus}`);
+                  await supabase.from('orders').update({ status: 'pending' }).eq('id', order.id);
+                  latestOrder.status = 'pending';
+                  console.log(`[PIX SAFETY] Order #${order.id} is now PENDING. (Was ${oldStatus})`);
+                }
+
+                io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+                // Re-emitindo como novo para garantir que apareça se o monitor ainda não o tiver no estado
+                io.emit("order:new", { ...latestOrder, payment_status: 'paid', status: 'pending' });
+              }, 350);
+              
               console.log(`[WEBHOOK] Order #${order.id} paid via MP`);
             } else {
               console.log(`[WEBHOOK] Payment ${paymentId} status is ${mpData.status}, skipping update.`);
@@ -1225,6 +1303,7 @@ async function startServer() {
         .single();
 
       if (error) throw error;
+      orgCache.clear(); // Important: Clear cache on update
       res.json(data);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1268,22 +1347,17 @@ async function startServer() {
         return res.status(403).json({ error: "Acesso negado a esta organização" });
       }
 
-      // 1. Buscar todos os usuários cadastrados desta loja
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('name, phone, created_at')
-        .eq('org_id', requestedOrgId)
-        .eq('role', 'user');
+      // Optimization: Fetch in parallel
+      const [profilesRes, ordersRes] = await Promise.all([
+        supabase.from('profiles').select('name, phone, created_at').eq('org_id', requestedOrgId).eq('role', 'user'),
+        supabase.from('orders').select('customer_name, customer_phone, total_price, created_at, status, payment_status').eq('org_id', requestedOrgId)
+      ]);
 
-      if (profilesError) throw profilesError;
+      const profiles = profilesRes.data;
+      const orders = ordersRes.data;
 
-      // 2. Buscar todos os pedidos desta loja (histórico completo)
-      const { data: orders, error: ordersError } = await supabase
-        .from('orders')
-        .select('customer_name, customer_phone, total_price, created_at, status, payment_status')
-        .eq('org_id', requestedOrgId);
-
-      if (ordersError) throw ordersError;
+      if (profilesRes.error) throw profilesRes.error;
+      if (ordersRes.error) throw ordersRes.error;
 
       // Agrupar dados
       const clientMap = new Map<string, { nome: string; telefone: string; total_pedidos: number; total_gasto: number; ultimo_pedido: string }>();
@@ -1618,10 +1692,89 @@ async function startServer() {
     res.json(data);
   });
 
+  app.get("/api/:orgId/clients", async (req, res) => {
+    try {
+      const orgId = req.params.orgId;
+      // Fetch profiles (registered users) and orders in parallel
+      const [profilesRes, ordersRes] = await Promise.all([
+        supabase.from('profiles').select('id, name, email, phone, created_at, avatar_url').eq('role', 'user'),
+        supabase.from('orders').select('customer_name, customer_phone, total_price, created_at, status, payment_status').eq('org_id', orgId)
+      ]);
+
+      if (profilesRes.error) throw profilesRes.error;
+      if (ordersRes.error) throw ordersRes.error;
+
+      const clientMap = new Map<string, { id?: string; nome: string; telefone: string; total_pedidos: number; total_gasto: number; ultimo_pedido: string; avatar_url?: string }>();
+
+      // Add registered profiles
+      (profilesRes.data || []).forEach(p => {
+        const identifier = p.phone || p.email || p.id;
+        if (!identifier) return;
+
+        clientMap.set(identifier, {
+          id: p.id,
+          nome: p.name || 'Cliente sem nome',
+          telefone: p.phone || 'Sem Telefone',
+          total_pedidos: 0,
+          total_gasto: 0,
+          ultimo_pedido: p.created_at,
+          avatar_url: p.avatar_url
+        });
+      });
+
+      // Add/Update with order data
+      (ordersRes.data || []).forEach(order => {
+        const phone = order.customer_phone;
+        if (!phone) return;
+        
+        const current = clientMap.get(phone) || {
+          nome: order.customer_name || 'Cliente',
+          telefone: phone,
+          total_pedidos: 0,
+          total_gasto: 0,
+          ultimo_pedido: order.created_at
+        };
+
+        current.total_pedidos += 1;
+        // Count as "spent" if order is finalized or paid
+        const isFinished = order.status === 'delivered' || order.status === 'ready' || order.payment_status === 'paid';
+        if (isFinished) {
+          current.total_gasto += Number(order.total_price) || 0;
+        }
+
+        if (new Date(order.created_at) > new Date(current.ultimo_pedido)) {
+          current.ultimo_pedido = order.created_at;
+          current.nome = order.customer_name || current.nome;
+        }
+
+        clientMap.set(phone, current);
+      });
+
+      const clientsList = Array.from(clientMap.values()).sort((a, b) => {
+        if (b.total_gasto !== a.total_gasto) return b.total_gasto - a.total_gasto;
+        return new Date(b.ultimo_pedido).getTime() - new Date(a.ultimo_pedido).getTime();
+      });
+
+      res.json(clientsList);
+    } catch (err: any) {
+      console.error("[SERVER] Error fetching clients:", err.message);
+      res.status(500).json({ error: "Erro ao buscar clientes" });
+    }
+  });
+
+  app.post("/api/products", async (req, res) => {
+    const { name, description, price, ingredients, category, image_url, org_id, promotional_price } = req.body;
+    const { data, error } = await supabase.from('products').insert([{
+      name, description, price, ingredients, category, image_url, org_id, available: true, promotional_price
+    }]).select().maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
   app.post("/api/:orgId/products", billingGuard, async (req, res) => {
-    const { name, description, price, ingredients, category = 'churrasco', image_url, available } = req.body;
+    const { name, description, price, ingredients, category = 'churrasco', image_url, available, promotional_price } = req.body;
     const { data } = await supabase.from('products').insert([{
-      name, description, price, ingredients, category, image_url, available: available !== false, org_id: req.params.orgId
+      name, description, price, ingredients, category, image_url, available: available !== false, org_id: req.params.orgId, promotional_price
     }]).select();
     res.json(data?.[0]);
   });
@@ -1632,15 +1785,16 @@ async function startServer() {
   });
 
   app.patch("/api/products/:id", async (req, res) => {
-    const { name, description, price, ingredients, category, image_url, available } = req.body;
+    const { name, description, price, ingredients, category, image_url, available, promotional_price } = req.body;
     const updatePayload: any = { name, description, price, ingredients, category, image_url };
     if (available !== undefined) updatePayload.available = available;
+    if (promotional_price !== undefined) updatePayload.promotional_price = promotional_price;
 
     const { data, error } = await supabase.from('products')
       .update(updatePayload)
       .eq('id', req.params.id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
@@ -1668,7 +1822,7 @@ async function startServer() {
     const { data, error } = await supabase.from('extra_ingredients')
       .update({ name, price })
       .eq('id', req.params.id)
-      .select().single();
+      .select().maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
@@ -1681,6 +1835,11 @@ async function startServer() {
   // Global orders for Courier/Delivery (simplified for now)
   app.get("/api/orders", async (req, res) => {
     const { data } = await supabase.from('orders').select('*').in('status', ['ready', 'shipped', 'preparing']).order('created_at', { ascending: false });
+    res.json(data);
+  });
+
+  app.get("/api/my-orders/:userId", async (req, res) => {
+    const { data } = await supabase.from('orders').select('*').eq('user_id', req.params.userId).order('created_at', { ascending: false });
     res.json(data);
   });
 
@@ -1712,11 +1871,31 @@ async function startServer() {
       const { data: newOrder, error } = await supabase.from('orders').insert([{
         user_id, customer_name, customer_phone, items, total_price, payment_status, address, latitude, longitude, org_id: req.params.orgId, payment_method,
         status: initialStatus
-      }]).select().single();
+      }]).select().maybeSingle();
 
       if (error) throw error;
 
+      // Logica de Pontos: deduzir recompensa e ADICIONAR pontos do novo pedido
+      const { use_reward } = req.body;
+      if (user_id) {
+        const { data: profile } = await supabase.from('profiles').select('points').eq('id', user_id).single();
+        let currentPoints = profile?.points || 0;
+        
+        if (use_reward) {
+          currentPoints = Math.max(0, currentPoints - 100);
+        }
+        
+        // Usuário ganha 10 pontos na hora que faz o pedido
+        currentPoints += 10;
+        
+        await supabase.from('profiles').update({ points: currentPoints }).eq('id', user_id);
+        io.emit("user:points_update", { userId: user_id, points: currentPoints });
+      }
+
+      // Emitir para a cozinha imediatamente (no monitor ele será filtrado se for Pix pendente)
+      console.log(`[SOCKET EMIT] NOVO PEDIDO: #${newOrder?.id} (${payment_method}) - Status: ${newOrder?.status}`);
       io.emit("order:new", newOrder);
+      
       res.json(newOrder);
     } catch (err: any) {
       console.error("[ORDER] Erro ao criar pedido:", err.message, err.details || "");
@@ -1729,72 +1908,68 @@ async function startServer() {
     const updateData: any = {};
     if (payment_status !== undefined) updateData.payment_status = payment_status;
     if (mp_payment_id !== undefined) updateData.mp_payment_id = mp_payment_id;
-    const { error } = await supabase.from('orders').update(updateData).eq('id', req.params.id);
-    if (error) console.error("[PAYMENT] Erro ao atualizar:", error.message);
-    if (payment_status) io.emit("order:payment_update", { id: parseInt(req.params.id), payment_status });
+    
+    // If it's becoming paid, we need the full order to notify kitchen
+    const { data: order, error } = await supabase.from('orders').update({ ...updateData, status: 'pending' }).eq('id', req.params.id).select().maybeSingle();
+    
+    if (error) {
+      console.error("[PAYMENT] Erro ao atualizar:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (payment_status === 'paid' && order) {
+      console.log(`[MANUAL PAYMENT] ID #${order.id} confirmed. Forced PENDING.`);
+        // Wait 350ms to force PENDING to the kitchen monitor
+        setTimeout(async () => {
+          const { data: check } = await supabase.from('orders').select('status').eq('id', order.id).single();
+          
+          // FINAL SAFETY LOCK: Force status 'pending' if not finished
+          if (check?.status !== 'ready' && check?.status !== 'shipped' && check?.status !== 'delivered') {
+            const oldStatus = check?.status;
+            console.log(`[MANUAL SAFETY] Forcing 'pending' for #${order.id}. Current in DB: ${oldStatus}`);
+            await supabase.from('orders').update({ status: 'pending' }).eq('id', order.id);
+            order.status = 'pending';
+            console.log(`[MANUAL SAFETY] Order #${order.id} is now PENDING. (Was ${oldStatus})`);
+          }
+
+          io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+          io.emit("order:new", { ...order, status: 'pending', payment_status: 'paid' });
+        }, 350);
+    } else if (payment_status) {
+      io.emit("order:payment_update", { id: parseInt(req.params.id), payment_status });
+    }
+    
     res.json({ success: true });
   });
 
   app.patch("/api/orders/:id/status", async (req, res) => {
-    const { status } = req.body;
+    const { status, courier_id } = req.body;
     const orderId = req.params.id;
+    console.log(`[STATUS REQUEST] Order #${orderId} -> ${status} (Requested by: ${req.ip || 'Unknown'})`);
+    
+    // 1. Get current order
+    const { data: order, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
+    if (!order || fetchErr) return res.status(404).json({ error: "Pedido não encontrado." });
 
-    // Get current order to check status and payment
-    const { data: order } = await supabase.from('orders').select('*').eq('id', orderId).single();
-
-    if (!order) {
-      return res.status(404).json({ error: "Pedido não encontrado." });
-    }
-
-    // Impedir entrega se pagamento não concluído (exceto pagamento em mãos/cartão presencial)
+    // 2. Prepare update payload
+    const updatePayload: any = { status };
+    if (courier_id) updatePayload.courier_id = courier_id;
+    if (status === 'shipped') updatePayload.shipped_at = new Date().toISOString();
     if (status === 'delivered') {
-      if (order.payment_status !== 'paid') {
-        if (order.payment_method === 'pix') {
-          return res.status(400).json({ error: "Não é possível finalizar a entrega sem pagamento concluído." });
-        } else {
-          // Para entregas onde o pagamento é no ato (Dinheiro/Cartão), marcamos como pago
-          await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', orderId);
-          order.payment_status = 'paid';
-          io.emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
-        }
-      }
-    }
-
-    // Award points only when transitioning to delivered for the first time
-    if (order && status === 'delivered' && order.status !== 'delivered') {
-      if (order.user_id) {
-        const { data: profile } = await supabase.from('profiles').select('points').eq('id', order.user_id).single();
-        const newPoints = (profile?.points || 0) + 2;
-        await supabase.from('profiles').update({ points: newPoints }).eq('id', order.user_id);
-        io.emit("user:points_update", { userId: order.user_id, points: newPoints });
-      }
-    }
-
-    console.log(`[Status Update] Order ID: ${orderId}, New Status: ${status}`);
-    // Update order status
-    interface UpdatePayload {
-      status: string;
-      shipped_at?: string;
-      delivered_at?: string;
-    }
-
-    const updatePayload: UpdatePayload = { status };
-    if (status === 'shipped') {
-      updatePayload.shipped_at = new Date().toISOString();
-    } else if (status === 'delivered') {
       updatePayload.delivered_at = new Date().toISOString();
+      updatePayload.payment_status = 'paid'; // Entregue sempre marca como pago
     }
 
-    const { error: updateError } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
+    // 3. Update DB
+    const { data: updatedOrder, error: updateErr } = await supabase.from('orders').update(updatePayload).eq('id', orderId).select().maybeSingle();
+    if (updateErr) return res.status(500).json({ error: "Erro ao atualizar banco." });
 
-    if (updateError) {
-      console.error("[Status Update Error]:", updateError);
-      return res.status(500).json({ error: "Erro ao atualizar status no banco de dados." });
-    }
+    // 4. Points & Post-update logic (Pontos agora são dados na criação do pedido)
+    // 5. Emit updates
+    io.emit("order:update", { id: parseInt(orderId), status, courier_id });
+    if (status === 'delivered') io.emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
 
-    console.log(`[Status Update Success] Order ${orderId} is now ${status}`);
-    io.emit("order:update", { id: parseInt(orderId), status });
-    res.json({ success: true });
+    res.json({ success: true, status: updatedOrder?.status });
   });
 
   // Socket.io connection
@@ -1861,9 +2036,48 @@ Diretrizes:
   app.get("/api/:orgId/couriers", async (req, res) => {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, name, phone, commission_rate')
+      .select('id, name, phone, email, commission_rate')
       .eq('org_id', req.params.orgId)
       .eq('role', 'courier');
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.post("/api/couriers", async (req, res) => {
+    const { name, phone, email, password, commission_rate, org_id } = req.body;
+    const { data, error } = await supabase
+      .from('profiles')
+      .insert([{
+        name,
+        phone,
+        email,
+        password: hashPassword(password),
+        commission_rate: commission_rate || 15,
+        org_id,
+        role: 'courier'
+      }])
+      .select()
+      .maybeSingle();
+
+    if (error) return res.status(400).json({ error: "Erro ao cadastrar: telefone já em uso ou dados inválidos." });
+    res.json(data);
+  });
+
+  app.put("/api/couriers/:id", async (req, res) => {
+    const { name, phone, email, password, commission_rate, org_id } = req.body;
+    const updateData: any = { name, phone, email, commission_rate, org_id };
+    
+    if (password && password.trim().length > 0) {
+      updateData.password = hashPassword(password);
+    }
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', req.params.id)
+      .select()
+      .maybeSingle();
+
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   });
@@ -1889,24 +2103,63 @@ Diretrizes:
     const { courier_id, delivery_fee } = req.body;
     const { data, error } = await supabase
       .from('orders')
-      .update({ courier_id, delivery_fee: delivery_fee || 0, status: 'preparing' })
+      .update({ courier_id, delivery_fee: delivery_fee || 0 })
       .eq('id', req.params.id)
       .select()
       .single();
     if (error) return res.status(500).json({ error: error.message });
 
-    io.emit("order:update", { id: data.id, status: 'preparing', courier_id });
+    io.emit("order:update", { id: data.id, status: data.status, courier_id });
     res.json(data);
   });
 
   app.get("/api/courier/:id/orders", async (req, res) => {
     const { data, error } = await supabase
       .from('orders')
-      .select('*')
+      .select('*, customer_profile:user_id(avatar_url)')
       .eq('courier_id', req.params.id)
       .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
+  });
+
+  app.post("/api/couriers/:id/advance", async (req, res) => {
+    const { amount } = req.body;
+    const courierId = req.params.id;
+    const { data: courier } = await supabase.from('profiles').select('org_id, name').eq('id', courierId).maybeSingle();
+    if (!courier) return res.status(404).json({ error: "Entregador não encontrado" });
+
+    const { data, error } = await supabase.from('expenses').insert([{
+      description: `Vale: ${courier.name}`,
+      amount,
+      category: 'Vale',
+      date: new Date().toISOString(),
+      org_id: courier.org_id,
+      courier_id: courierId,
+      settled: false
+    }]).select().maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+  });
+
+  app.post("/api/couriers/:id/payout", async (req, res) => {
+    const { error: orderError } = await supabase
+      .from('orders')
+      .update({ commission_paid: true })
+      .eq('courier_id', req.params.id)
+      .eq('status', 'delivered')
+      .eq('commission_paid', false);
+
+    if (orderError) return res.status(500).json({ error: orderError.message });
+
+    await supabase
+      .from('expenses')
+      .update({ settled: true })
+      .eq('courier_id', req.params.id)
+      .eq('settled', false);
+
+    res.json({ success: true });
   });
 
   app.get("/api/courier/:id/stats", async (req, res) => {
@@ -1948,40 +2201,25 @@ Diretrizes:
 
     let totalLifetimeDeliveries = 0;
     let monthlyDeliveries = 0;
-
     let totalDeliveryTimeMins = 0;
     let timedDeliveriesCount = 0;
-    let monthlyDeliveryTimeMins = 0;
-    let monthlyTimedDeliveriesCount = 0;
 
     for (const order of (allDeliveredOrders || [])) {
       totalLifetimeDeliveries++;
-
       const orderDate = order.created_at ? new Date(order.created_at) : null;
       const isThisMonth = orderDate && orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear;
-
-      if (isThisMonth) {
-        monthlyDeliveries++;
-      }
+      if (isThisMonth) monthlyDeliveries++;
 
       if (order.shipped_at && order.delivered_at) {
         const shipped = new Date(order.shipped_at).getTime();
         const delivered = new Date(order.delivered_at).getTime();
         const minutes = (delivered - shipped) / (1000 * 60);
-
         if (minutes >= 0) {
           totalDeliveryTimeMins += minutes;
           timedDeliveriesCount++;
-          if (isThisMonth) {
-            monthlyDeliveryTimeMins += minutes;
-            monthlyTimedDeliveriesCount++;
-          }
         }
       }
     }
-
-    const avg_lifetime_time = timedDeliveriesCount > 0 ? Math.round(totalDeliveryTimeMins / timedDeliveriesCount) : 0;
-    const avg_monthly_time = monthlyTimedDeliveriesCount > 0 ? Math.round(monthlyDeliveryTimeMins / monthlyTimedDeliveriesCount) : 0;
 
     res.json({
       total_commissions: totalCommissions,
@@ -1989,10 +2227,84 @@ Diretrizes:
       net_pay: totalCommissions - totalAdvances,
       total_lifetime_deliveries: totalLifetimeDeliveries,
       monthly_deliveries: monthlyDeliveries,
-      avg_lifetime_time_mins: avg_lifetime_time,
-      avg_monthly_time_mins: avg_monthly_time,
-      total_deliveries: totalLifetimeDeliveries // fallback legacy
+      avg_lifetime_time_mins: timedDeliveriesCount > 0 ? Math.round(totalDeliveryTimeMins / timedDeliveriesCount) : 0,
+      total_deliveries: totalLifetimeDeliveries
     });
+  });
+
+  app.get("/api/:orgId/courier-stats", async (req, res) => {
+    try {
+      // 1. Get all couriers for this org
+      const { data: couriers } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('org_id', req.params.orgId)
+        .eq('role', 'courier');
+
+      if (!couriers || couriers.length === 0) return res.json({});
+
+      const courierIds = couriers.map(c => c.id);
+
+      // 2. Get delivered orders for these couriers
+      const { data: orders } = await supabase
+        .from('orders')
+        .select('courier_id, delivery_fee, status, commission_paid, created_at, shipped_at, delivered_at')
+        .in('courier_id', courierIds)
+        .eq('status', 'delivered');
+
+      // 3. Get unpaid expenses for these couriers
+      const { data: expenses } = await supabase
+        .from('expenses')
+        .select('courier_id, amount')
+        .in('courier_id', courierIds)
+        .eq('settled', false);
+
+      const stats: any = {};
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
+
+      courierIds.forEach(id => {
+        const courierOrders = (orders || []).filter(o => o.courier_id === id);
+        const courierExpenses = (expenses || []).filter(e => e.courier_id === id);
+
+        const unpaidCommissions = courierOrders.filter(o => !o.commission_paid).reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
+        const totalAdvances = courierExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+        
+        let totalLifetimeDeliveries = 0;
+        let monthlyDeliveries = 0;
+        let totalTime = 0;
+        let timedCount = 0;
+
+        courierOrders.forEach(o => {
+          totalLifetimeDeliveries++;
+          const d = o.created_at ? new Date(o.created_at) : null;
+          if (d && d.getMonth() === currentMonth && d.getFullYear() === currentYear) monthlyDeliveries++;
+
+          if (o.shipped_at && o.delivered_at) {
+            const mins = (new Date(o.delivered_at).getTime() - new Date(o.shipped_at).getTime()) / 60000;
+            if (mins >= 0) {
+              totalTime += mins;
+              timedCount++;
+            }
+          }
+        });
+
+        stats[id] = {
+          total_commissions: unpaidCommissions,
+          total_advances: totalAdvances,
+          net_pay: unpaidCommissions - totalAdvances,
+          total_lifetime_deliveries: totalLifetimeDeliveries,
+          monthly_deliveries: monthlyDeliveries,
+          avg_lifetime_time_mins: timedCount > 0 ? Math.round(totalTime / timedCount) : 0,
+          total_deliveries: totalLifetimeDeliveries
+        };
+      });
+
+      res.json(stats);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post("/api/courier/:id/payout", async (req, res) => {
@@ -2042,7 +2354,7 @@ Diretrizes:
         settled: false
       }])
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
@@ -2066,9 +2378,16 @@ Diretrizes:
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, "dist")));
+    // In production, the compiled server.js is inside dist/
+    // So __dirname will be the dist directory itself.
+    // If running from root via tsx, __dirname is root.
+    const isCompiled = __dirname.endsWith('dist') || __dirname.includes('/dist/') || __dirname.includes('\\dist');
+    const distPath = isCompiled ? __dirname : path.join(__dirname, "dist");
+
+    console.log(`[SERVER] Serving static files from: ${distPath}`);
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 

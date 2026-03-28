@@ -1,14 +1,47 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-serif: "Playfair Display", serif;
+
+  /* Premium Color Palette */
+  --color-brand-primary: #f97316; /* Orange 500 */
+  --color-brand-secondary: #ea580c; /* Orange 600 */
+  --color-brand-accent: #fbbf24; /* Amber 400 */
+  --color-bg-surface: #fdfcfb;
+  --color-bg-glass: rgba(255, 255, 255, 0.7);
+  
+  /* Custom Shadows */
+  --shadow-premium: 0 10px 40px -10px rgba(0, 0, 0, 0.08);
+  --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+  --shadow-glow: 0 0 20px rgba(249, 115, 22, 0.2);
+
+  /* Animation Overrides */
+  --animate-float: float 3s ease-in-out infinite;
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
 }
 
 body {
-  @apply bg-[#FDFCFB] text-gray-900 antialiased;
+  @apply bg-bg-surface text-slate-900 antialiased selection:bg-brand-primary/20 selection:text-brand-secondary;
+}
+
+/* Glassmorphism Utility */
+.glass {
+  @apply bg-bg-glass backdrop-blur-xl border border-white/40 shadow-glass;
+}
+
+.glass-dark {
+  @apply bg-black/40 backdrop-blur-xl border border-white/10 shadow-glass;
+}
+
+/* Heading Typography */
+h1, h2, h3, .font-display {
+  @apply font-display tracking-tight;
 }
 
 /* Custom scrollbar for a cleaner look */
@@ -26,5 +59,15 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
+  background: #cbd5e1;
+}
+
+/* Premium Button Hover Effect */
+.btn-premium {
+  @apply transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] hover:shadow-glow;
+}
+
+/* SEO Utilities */
+.seo-only {
+  display: none;
 }

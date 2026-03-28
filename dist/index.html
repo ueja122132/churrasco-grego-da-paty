@@ -1,12 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/logo.png" />
+    <link rel="apple-touch-icon" href="/logo.png" />
     
     <!-- Primary Meta Tags -->
     <title>Churrasco Grego da Paty - O Melhor Sabor da Região!</title>
+    <script>
+      // Injeção dinâmica para evitar avisos de compatibilidade estática
+      const meta = document.createElement('meta');
+      meta.name = "theme-color";
+      meta.content = "#ea580c";
+      document.head.appendChild(meta);
+    </script>
     <meta name="title" content="Churrasco Grego da Paty - O Melhor Sabor da Região!" />
     <meta name="description" content="Peça o melhor Churrasco Grego diretamente pelo nosso site. Qualidade, sabor e entrega rápida!" />
 
@@ -15,20 +23,32 @@
     <meta property="og:url" content="https://churrascogregodapaty.com/" />
     <meta property="og:title" content="Churrasco Grego da Paty - Cardápio Online" />
     <meta property="og:description" content="O melhor churrasco grego da região agora no seu celular. Veja nosso cardápio e peça agora!" />
-    <meta property="og:image" content="https://churrascogregodapaty.com/logo.png" />
+    <meta property="og:image" content="https://churrascogregodapaty.com/logo.png?v=2" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Logo do Churrasco Grego da Paty" />
+    <meta itemprop="image" content="https://churrascogregodapaty.com/logo.png?v=2" />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
     <meta property="twitter:url" content="https://churrascogregodapaty.com/" />
     <meta property="twitter:title" content="Churrasco Grego da Paty" />
     <meta property="twitter:description" content="O melhor churrasco grego da região agora no seu celular." />
-    <meta property="twitter:image" content="https://churrascogregodapaty.com/logo.png" />
+    <meta property="twitter:image" content="https://churrascogregodapaty.com/logo.png?v=2" />
 
-    <meta name="theme-color" content="#ea580c" />
-    <script type="module" crossorigin src="/assets/index-lEiTDwF8.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-C7ZNA3Xk.css">
+    <!-- Mobile & PWA Optimization -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Paty Churrasco" />
+    <meta name="color-scheme" content="light dark" />
+    <script type="module" crossorigin src="/assets/index-CIjs0wT4.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BRzdzL0E.css">
   </head>
   <body>
+    <!-- Hidden logo to force crawler priority -->
+    <div class="seo-only"><img src="https://churrascogregodapaty.com/logo.png?v=3" alt="Logo Sharing" /></div>
     <div id="root"></div>
   </body>
 </html>

@@ -82,21 +82,6 @@
     - [x] Verify fix by creating a user via `/paty-churrasco/register` and checking the dashboard <!-- id: 22 -->
 
 
-# Store Landing & Login Modal
-
-- [x] Phase 12: Store Landing Component & Routing
-    - [x] Created StoreLanding component (Reverted and used SalesPage directly)
-    - [x] Updated routes to use StoreLanding at /:slug (Enabled public access instead)
-    - [x] Created LoginModal component (Added inline modal in SalesPage)
-    - [x] Added modal state and login prompt on addToCart
-    - [x] Verified correct rendering of menu and modal for unauthenticated users
-    - [x] Fixed "new row violates row-level security policy for table 'orders'" bug by having user manually apply permissive insert policy.
-    - [x] Re-added user name to welcome greeting and customized footer on SalesPage
-    - [x] Added backend polling auto-close for PIX QR code on Sales and Delivery pages.
-
-# SaaS Billing UI for Store Admins
-
-- [x] Phase 13: SaaS Plan Billing Interface in Admin Dashboard
     - [x] Create a new "Plano e Faturamento" tab in the [AdminPage](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx#2873-4321) (Store Admin Dashboard).
     - [x] Fetch and display the current SaaS plan (Trial, Basic, Premium) and next billing date.
     - [x] Display a PIX QR Code for payment when approaching the due date.
@@ -126,6 +111,10 @@
     - [x] Authentication check <!-- id: 2 -->
     - [x] Input validation check <!-- id: 3 -->
     - [x] Security headers check <!-- id: 4 -->
+- [x] Analisar o ambiente local e stack tecnológica `[x]`
+- [x] Verificar logs e métricas de desempenho (se possível) `[x]`
+- [x] Identificar gargalos e implementar melhorias `[x]`
+- [x] Propor e implementar melhorias de performance `[x]`
 - [x] Review environment variables and sensitive data handling <!-- id: 5 -->
 - [x] Propose fixes for identified vulnerabilities <!-- id: 6 -->
 - [x] Implement and verify security improvements <!-- id: 7 -->
@@ -253,3 +242,11 @@
     - [x] Calculate MRR based on active subscriptions
     - [x] Build visual component in [App.tsx](file:///c:/Users/AJEU_PATY/Desktop/churrasco-grego-da-paty/src/App.tsx) (SuperAdminPage)
     - [x] Display MRR, Active Lojas, and Churn estimation
+245: 
+246: # Authentication Fix (Phase 18)
+247: 
+248: - [x] Phase 18: Auth Reliability & Identity Sync
+249:     - [x] Fix `AuthContext` role identification (use `role` instead of `is_super_admin`)
+250:     - [x] Fix `POST /api/organizations` permission (Allow owner registration)
+251:     - [x] Unify `profiles.id` with `auth.users.id` for Super Admin (Ajeu/Paty)
+252:     - [x] Verify final login after password sync by user

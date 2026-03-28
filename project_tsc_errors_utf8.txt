@@ -1,0 +1,2 @@
+﻿src/components/LoginModal.tsx(2,99): error TS2307: Cannot find module '@/components/ui/dialog' or its corresponding type declarations.
+tmp_migrate_users.ts(20,22): error TS2554: Expected 0-1 arguments, but got 2.

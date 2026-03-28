@@ -8,8 +8,9 @@
   },
   "scripts": {
     "dev": "tsx watch server.ts",
-    "start": "NODE_ENV=production node --import tsx/esm server.ts",
-    "build": "vite build",
+    "build:server": "tsc -p tsconfig.node.json",
+    "start": "NODE_ENV=production node dist/server.js",
+    "build": "vite build && npm run build:server",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
