@@ -1565,6 +1565,29 @@ async function startServer() {
     }
   });
 
+  app.post("/api/auth/reset-password", async (req, res) => {
+    const { identifier, newPassword } = req.body;
+    if (!identifier || !newPassword) return res.status(400).json({ error: "Dados incompletos" });
+
+    try {
+      const isEmail = identifier.includes('@');
+      let query = supabase.from('profiles').select('id');
+      if (isEmail) query = query.eq('email', identifier);
+      else query = query.eq('phone', identifier);
+
+      const { data } = await query.maybeSingle();
+      if (!data) return res.status(404).json({ error: "Usuário não encontrado" });
+
+      const hashed = hashPassword(newPassword);
+      const { error: updateError } = await supabase.from('profiles').update({ password: hashed }).eq('id', data.id);
+      
+      if (updateError) throw updateError;
+      res.json({ success: true, message: "Senha atualizada com sucesso!" });
+    } catch (err: any) {
+      res.status(500).json({ error: "Erro ao resetar senha." });
+    }
+  });
+
   app.get("/api/users/:id", async (req, res) => {
     // Include org_id and role to prevent session corruption in the frontend
     const { data, error } = await supabase.from('profiles').select('id, name, phone, points, address, latitude, longitude, org_id, role').eq('id', req.params.id).single();

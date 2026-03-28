@@ -4,7 +4,8 @@ import {
   Lock, 
   ArrowRight, 
   Store, 
-  Rocket 
+  Rocket,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { Link, useNavigate } from "react-router-dom";
@@ -21,6 +22,10 @@ export const LoginPage = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showRecuperar, setShowRecuperar] = useState(false);
+  const [recuperarId, setRecuperarId] = useState("");
+  const [recoverPassword, setRecoverPassword] = useState("");
+  const [isRecovering, setIsRecovering] = useState(false);
 
   const tryCustomLogin = async (credentials: any) => {
     const res = await fetch('/api/auth/login', {
@@ -60,6 +65,32 @@ export const LoginPage = () => {
       alert(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRecuperar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (recoverPassword.length < 6) return alert("A senha deve ter pelo menos 6 dígitos");
+    setIsRecovering(true);
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifier: recuperarId, newPassword: recoverPassword })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("Senha redefinida com sucesso! Agora você pode entrar.");
+        setShowRecuperar(false);
+        setRecuperarId("");
+        setRecoverPassword("");
+      } else {
+        alert(data.error || "Erro ao recuperar");
+      }
+    } catch (err) {
+      alert("Erro ao conectar ao servidor.");
+    } finally {
+      setIsRecovering(false);
     }
   };
 
@@ -156,18 +187,79 @@ export const LoginPage = () => {
               </button>
             </form>
 
-            <div className="mt-8 space-y-4">
-               <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider">
-                  <Link to="/register?type=customer" className="text-orange-500 hover:text-orange-400">Novo aqui? Cadastrar</Link>
-                  <Link to="/start" className="text-slate-400 hover:text-white">Seja Parceiro</Link>
-               </div>
-               <div className="text-center">
-                  <Link to="/start" className="text-[9px] text-slate-600 hover:text-slate-500 uppercase tracking-[0.2em] font-bold">Esqueceu sua senha?</Link>
-               </div>
-            </div>
+             <div className="mt-8 space-y-4">
+                <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider">
+                   <Link to="/register?type=customer" className="text-orange-500 hover:text-orange-400">Novo aqui? Cadastrar</Link>
+                   <Link to="/start" className="text-slate-400 hover:text-white">Seja Parceiro</Link>
+                </div>
+                <div className="text-center">
+                   <button 
+                     type="button" 
+                     onClick={() => setShowRecuperar(true)}
+                     className="text-[9px] text-slate-600 hover:text-slate-500 uppercase tracking-[0.2em] font-bold"
+                   >
+                     Esqueceu sua senha?
+                   </button>
+                </div>
+             </div>
           </div>
         </motion.div>
       </div>
+
+      <AnimatePresence>
+        {showRecuperar && (
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-slate-900 border border-white/10 p-10 rounded-[2.5rem] w-full max-w-sm shadow-2xl relative"
+            >
+              <button onClick={() => setShowRecuperar(false)} className="absolute top-6 right-6 text-slate-500 hover:text-white" title="Fechar" aria-label="Fechar"><X size={20} /></button>
+              
+              <div className="text-center mb-8">
+                <div className="w-12 h-12 bg-orange-500/10 rounded-2xl flex items-center justify-center mx-auto mb-4 text-orange-500">
+                  <Lock size={24} />
+                </div>
+                <h3 className="text-xl font-black italic uppercase tracking-tighter">Recuperar Senha</h3>
+                <p className="text-slate-500 text-[10px] font-bold uppercase mt-2">Crie uma nova senha secreta</p>
+              </div>
+
+              <form onSubmit={handleRecuperar} className="space-y-4">
+                <div>
+                   <label className="text-[9px] font-black uppercase text-slate-500 ml-1">Seu E-mail ou Telefone</label>
+                   <input 
+                    required 
+                    type="text" 
+                    value={recuperarId} 
+                    onChange={e => setRecuperarId(e.target.value)}
+                    className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500 transition-all font-bold text-white text-sm"
+                    placeholder="Ex: 62999..."
+                   />
+                </div>
+                <div>
+                   <label className="text-[9px] font-black uppercase text-slate-500 ml-1">Nova Senha Escolhida</label>
+                   <input 
+                    required 
+                    type="password" 
+                    value={recoverPassword} 
+                    onChange={e => setRecoverPassword(e.target.value)}
+                    className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500 transition-all font-bold text-white text-sm"
+                    placeholder="Mínimo 6 caracteres"
+                   />
+                </div>
+                <button 
+                  type="submit" 
+                  disabled={isRecovering}
+                  className="w-full py-5 bg-white text-slate-950 rounded-2xl font-black uppercase tracking-[0.2em] text-xs hover:bg-orange-500 hover:text-white transition-all disabled:opacity-50"
+                >
+                  {isRecovering ? 'Salvando...' : 'Redefinir Senha'}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
