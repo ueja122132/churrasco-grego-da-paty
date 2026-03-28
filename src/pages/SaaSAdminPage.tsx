@@ -10,7 +10,7 @@ import {
   Calendar,
   DollarSign
 } from 'lucide-react';
-import { motion } from "motion/react";
+import { motion } from "framer-motion";
 import { cn } from '../lib/utils';
 import { supabase } from '../supabase';
 
@@ -108,7 +108,7 @@ export const SaaSAdminPage: React.FC<SaaSAdminPageProps> = ({ user, notify }) =>
           <DollarSign size={20} />
           <div className="text-right">
             <p className="text-[10px] font-bold uppercase opacity-80">Receita Estimada</p>
-            <p className="font-black text-xl">R$ {metricSummary.monthlyRev.toLocaleString('pt-BR')}</p>
+            <p className="font-black text-xl">R$ {(metricSummary.monthlyRev || 0).toLocaleString('pt-BR')}</p>
           </div>
         </div>
       </header>
