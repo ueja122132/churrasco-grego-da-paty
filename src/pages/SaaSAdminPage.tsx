@@ -38,13 +38,16 @@ export const SaaSAdminPage: React.FC<SaaSAdminPageProps> = ({ user, notify }) =>
     setLoading(true);
     try {
       const { data: metrics, error: mErr } = await supabase.rpc('get_organizations_metrics');
-      if (metrics?.[0]) {
+      if (metrics && metrics.length > 0) {
         setMetricSummary({
-          totalOrgs: metrics[0].total_organizations,
-          activeSubs: metrics[0].active_subscriptions,
-          monthlyRev: metrics[0].monthly_revenue,
-          totalOrders: metrics[0].total_orders_completed
+          totalOrgs: metrics[0].total_organizations || 0,
+          activeSubs: metrics[0].active_subscriptions || 0,
+          monthlyRev: metrics[0].monthly_revenue || 0,
+          totalOrders: metrics[0].total_orders_completed || 0
         });
+      } else {
+        // Fallback for empty database
+        setMetricSummary({ totalOrgs: 0, activeSubs: 0, monthlyRev: 0, totalOrders: 0 });
       }
 
       const { data: orgsData, error: oErr } = await supabase
