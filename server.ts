@@ -24,8 +24,17 @@ const __dirname = dirname(__filename);
 const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+// Robust Initialization Checks
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error("\x1b[31m%s\x1b[0m", "=========================================================");
+  console.error("\x1b[31m%s\x1b[0m", "ERRO FATAL: VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY está faltando!");
+  console.error("\x1b[31m%s\x1b[0m", "Configure estas variáveis no painel da sua hospedagem.");
+  console.error("\x1b[31m%s\x1b[0m", "=========================================================");
+}
+
+const supabase = createClient(supabaseUrl || "https://placeholder.supabase.co", supabaseAnonKey || "placeholder");
+const supabaseAdmin = createClient(supabaseUrl || "https://placeholder.supabase.co", supabaseServiceKey || "placeholder");
 
 // Database persistence note: Migrating from SQLite to Supabase for production scalability.
 
