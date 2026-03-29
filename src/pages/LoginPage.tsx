@@ -41,26 +41,41 @@ export const LoginPage = () => {
     
     const data = await res.json();
     login(data); // Using the object returned by the API
-    return true;
+    return data;
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
+      let finalRole = 'user';
+
       if (email.includes('@')) {
         // Tenta Supabase Auth Primeiro
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data: authData, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) {
            // Se falhar, tenta nossa API (pode ser um perfil sem conta auth)
-           await tryCustomLogin({ email, password });
+           const customUser = await tryCustomLogin({ email, password });
+           finalRole = (customUser as any).role || 'user';
+        } else if (authData.user) {
+           // Se logou pelo Supabase, busca o perfil para saber a Role antes de navegar
+           const { data: profile } = await supabase.from('profiles').select('role').eq('id', authData.user.id).single();
+           finalRole = profile?.role || 'user';
         }
       } else {
         // Login por telefone - Somente via API Customizada
-        await tryCustomLogin({ phone: email, password });
+        const customUser = await tryCustomLogin({ phone: email, password });
+        finalRole = (customUser as any).role || 'user';
       }
       
-      navigate('/');
+      // Navegação Inteligente Baseada na Role
+      if (finalRole === 'super_admin') {
+        navigate('/saas');
+      } else if (finalRole === 'courier') {
+        navigate('/courier');
+      } else {
+        navigate('/');
+      }
     } catch (err: any) {
       alert(err.message);
     } finally {
@@ -75,7 +90,7 @@ export const LoginPage = () => {
     try {
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: "application/json",
         body: JSON.stringify({ identifier: recuperarId, newPassword: recoverPassword })
       });
       const data = await res.json();

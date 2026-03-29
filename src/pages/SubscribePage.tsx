@@ -23,36 +23,9 @@ import { supabase } from "../supabase";
 import { cn } from "../lib/utils";
 import { Link, useNavigate } from "react-router-dom";
 
-const SAAS_PLANS = [
-  {
-    id: 'free',
-    name: 'Essencial Free',
-    price: 0,
-    desc: 'Para quem está começando seu império',
-    color: 'slate',
-    features: ['Até 5 produtos ativos', 'Gestão de pedidos básica', 'Link personalizado da loja', 'Relatórios diários']
-  },
-  {
-    id: 'pro',
-    name: 'Professional Pro',
-    price: 97,
-    desc: 'O kit completo para crescer rápido',
-    color: 'indigo',
-    popular: true,
-    features: ['Produtos ILIMITADOS', 'Configuração de entregadores', 'Métricas avançadas', 'Suporte prioritário via WhatsApp', 'Controle de adicionais']
-  },
-  {
-    id: 'enterprise',
-    name: 'Rede Enterprise',
-    price: 297,
-    desc: 'Poder total para expansão em massa',
-    color: 'purple',
-    features: ['Múltiplas lojas (até 3)', 'API para integrações', 'Gerente de conta dedicado', 'Customização total de tema', 'Dashboard de rede']
-  }
-];
-
 export const SubscribePage = () => {
   const navigate = useNavigate();
+  const [plans, setPlans] = useState<any[]>([]);
   const [step, setStep] = useState<'plans' | 'register' | 'payment' | 'success'>('plans');
   const [selectedPlan, setSelectedPlan] = useState<any>(null);
   const [formData, setFormData] = useState({
@@ -66,6 +39,15 @@ export const SubscribePage = () => {
   const [loading, setLoading] = useState(false);
   const [pixData, setPixData] = useState<any>(null);
 
+  useEffect(() => {
+    fetch('/api/saas/plans')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setPlans(data);
+      })
+      .catch(err => console.error("Erro ao carregar planos:", err));
+  }, []);
+
   const handleSelectPlan = (plan: any) => {
     setSelectedPlan(plan);
     setStep('register');
@@ -75,49 +57,26 @@ export const SubscribePage = () => {
     e.preventDefault();
     setLoading(true);
     try {
-      // 1. Create User
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: formData.email,
-        password: formData.password,
-        options: {
-          data: {
-            name: formData.name,
-            phone: formData.phone
-          }
-        }
-      });
-
-      if (authError) throw authError;
-      if (!authData.user) throw new Error("Erro ao criar usuário");
-
-      // 2. Create Organization
-      const res = await fetch('/api/organizations', {
+      // Modern SaaS Subscription Flow
+      const res = await fetch('/api/saas/subscribe/pix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: formData.storeName,
-          slug: formData.storeSlug,
-          owner_id: authData.user.id,
-          plan_id: selectedPlan.id
+          plan_id: selectedPlan.slug, // Pass slug as plan_id
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          store_name: formData.storeName,
+          store_slug: formData.storeSlug
         })
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Erro ao criar loja");
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erro ao processar assinatura");
 
-      const org = await res.json();
-
-      if (selectedPlan.price > 0) {
-        // Generate PIX
-        const pixRes = await fetch(`/api/organizations/${org.id}/billing/pix`, { method: 'POST' });
-        if (pixRes.ok) {
-          setPixData(await pixRes.json());
-          setStep('payment');
-        } else {
-          setStep('success'); // Fallback if payment generation fails
-        }
+      if (data.pix_qr_code) {
+        setPixData(data);
+        setStep('payment');
       } else {
         setStep('success');
       }
@@ -177,27 +136,27 @@ export const SubscribePage = () => {
         {/* Plans Step */}
         {step === 'plans' && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="grid md:grid-cols-3 gap-8">
-            {SAAS_PLANS.map(plan => (
+            {plans.map(plan => (
               <div key={plan.id} className={cn(
-                "group relative p-8 rounded-[2.5rem] border-2 transition-all hover:-translate-y-2",
-                plan.popular ? "bg-indigo-950/20 border-indigo-500 shadow-2xl shadow-indigo-900/20" : "bg-white/5 border-white/10 hover:border-white/20"
+                "group relative p-8 rounded-[2.5rem] border-2 transition-all hover:-translate-y-2 flex flex-col min-h-[500px]",
+                plan.is_popular ? "bg-indigo-950/20 border-indigo-500 shadow-2xl shadow-indigo-900/20" : "bg-white/5 border-white/10 hover:border-white/20"
               )}>
-                {plan.popular && (
+                {plan.is_popular && (
                   <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-indigo-500 text-white px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest">
                     Mais Popular
                   </div>
                 )}
                 
                 <h3 className="text-2xl font-black mb-2">{plan.name}</h3>
-                <div className="flex items-baseline gap-1 mb-4">
-                  <span className="text-4xl font-black">R$ {plan.price}</span>
-                  <span className="text-slate-500 text-sm font-bold">/mês</span>
+                <div className="flex items-baseline gap-1 mb-4 italic">
+                  <span className="text-4xl font-black">R$ {Number(plan.price).toFixed(2)}</span>
+                  <span className="text-slate-500 text-sm font-bold uppercase">/mês</span>
                 </div>
-                <p className="text-slate-400 text-sm mb-8">{plan.desc}</p>
+                <p className="text-slate-400 text-sm mb-8 italic">{plan.description}</p>
                 
-                <ul className="space-y-4 mb-10">
-                  {plan.features.map(feat => (
-                    <li key={feat} className="flex items-start gap-3 text-sm text-slate-300">
+                <ul className="space-y-4 mb-10 flex-1">
+                  {(plan.features || []).map((feat: string) => (
+                    <li key={feat} className="flex items-start gap-3 text-[11px] font-black uppercase tracking-tight text-slate-300 italic">
                       <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-0.5">
                         <Check className="text-emerald-500" size={12} strokeWidth={4} />
                       </div>

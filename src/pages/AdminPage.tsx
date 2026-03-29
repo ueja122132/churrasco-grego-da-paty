@@ -23,7 +23,8 @@ import {
   Image as ImageIcon,
   Check,
   RefreshCw,
-  ShieldCheck
+  ShieldCheck,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from '../lib/utils';
@@ -31,18 +32,13 @@ import { MetricsTab } from '../components/MetricsTab';
 import { Product, ExtraIngredient } from '../types';
 import FinancePage from './FinancePage';
 import { useTenant } from '../context/TenantContext';
+import { supabase } from '../supabase';
 
 interface AdminPageProps {
   user: any;
   org: any;
   notify: (msg: string, type?: 'success' | 'error' | 'info' | 'warning') => void;
 }
-
-const SAAS_PLANS = [
-  { id: 'free', name: 'Plano Grátis', price: 0, desc: 'Para quem está começando', features: ['Até 5 produtos', 'Relatórios básicos', 'Gestão de pedidos'] },
-  { id: 'pro', name: 'Plano Pro', price: 97, desc: 'Ideal para lojas em crescimento', features: ['Produtos ilimitados', 'Relatórios avançados', 'Marketing tools', 'Suporte prioritário'] },
-  { id: 'enterprise', name: 'Plano Enterprise', price: 297, desc: 'O poder total para sua rede', features: ['Multi-lojas', 'API access', 'Gerente de conta', 'SLA garantido'] }
-];
 
 const ADMIN_TABS = [
   { id: 'metrics', label: 'Dashboard', icon: LayoutDashboard },
@@ -73,6 +69,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const [newProductImage, setNewProductImage] = useState("");
   const [newProductPromo, setNewProductPromo] = useState("");
   const [savingProduct, setSavingProduct] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
 
   // Extra Ingredients states
   const [extraIngredients, setExtraIngredients] = useState<ExtraIngredient[]>([]);
@@ -111,10 +108,20 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const [promoPrice, setPromoPrice] = useState("");
 
   // Billing states
+  const [saasPlans, setSaasPlans] = useState<any[]>([]);
   const [selectedPlanId, setSelectedPlanId] = useState(currentOrg?.plan_id || currentOrg?.plan || 'free');
   const [changingPlan, setChangingPlan] = useState(false);
   const [generatingSaasPix, setGeneratingSaasPix] = useState(false);
   const [saasPixData, setSaasPixData] = useState<any>(null);
+
+  useEffect(() => {
+    fetch('/api/saas/plans')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setSaasPlans(data);
+      })
+      .catch(err => console.error("Erro ao carregar planos SaaS:", err));
+  }, []);
 
   useEffect(() => {
     if (!org && user?.org_id) {
@@ -181,6 +188,55 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
       }
     } catch (err) {
       console.error("[ADMIN DEBUG] Fatal error in fetchData:", err);
+    }
+  };
+
+  const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !currentOrg?.id) return;
+
+    setUploadingImage(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${currentOrg.id}.${fileExt}`;
+
+      // Ler arquivo como Base64
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1]); // Pega só o dado base64, sem o prefixo data:image/png;base64,
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const base64Data = await base64Promise;
+
+      // Chamar o proxy do servidor que tem a Service Role Key
+      const res = await fetch('/api/upload/product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file: base64Data,
+          fileName: fileName,
+          contentType: file.type
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Erro no servidor ao subir imagem");
+      }
+
+      const { publicUrl } = await res.json();
+      setNewProductImage(publicUrl);
+      notify("Imagem carregada com sucesso!", "success");
+    } catch (err: any) {
+      console.error("Erro no upload:", err);
+      notify("Erro ao subir imagem: " + (err.message || ""), "error");
+    } finally {
+      setUploadingImage(false);
     }
   };
 
@@ -506,33 +562,31 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
     }
   };
 
-  const handleSelectPlan = async (planId: string) => {
-    setChangingPlan(true);
-    try {
-      const res = await fetch(`/api/organizations/${currentOrg?.id}/plan`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: planId })
-      });
-      if (res.ok) {
-        setSelectedPlanId(planId);
-        notify("Plano alterado com sucesso!", "success");
-      }
-    } catch (err) {
-      notify("Erro ao alterar plano", "error");
-    } finally {
-      setChangingPlan(false);
-    }
+  const handleSelectPlan = (planId: string) => {
+    setSelectedPlanId(planId);
+    setSaasPixData(null); // Limpa PIX anterior se mudar de idéia
   };
 
   const generateSaasPix = async () => {
     setGeneratingSaasPix(true);
     try {
       const res = await fetch(`/api/organizations/${currentOrg?.id}/billing/pix`, {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: selectedPlanId })
       });
+      
+      const data = await res.json();
       if (res.ok) {
-        setSaasPixData(await res.json());
+        if (data.qr_code) {
+          setSaasPixData(data);
+          notify("PIX gerado! Pague agora para ativar o novo plano.", "success");
+        } else {
+          notify(data.message || "Plano atualizado com sucesso!", "success");
+          window.location.reload(); // Recarrega para aplicar limites
+        }
+      } else {
+        notify(data.error || "Erro ao processar faturamento", "error");
       }
     } catch (err) {
       notify("Erro ao gerar PIX", "error");
@@ -541,7 +595,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
     }
   };
 
-  const currentPlanObj = SAAS_PLANS.find(p => p.id === selectedPlanId) || SAAS_PLANS[0];
+  const currentPlanObj = saasPlans.find(p => p.slug === selectedPlanId) || saasPlans[0] || { name: 'Carregando...', price: 0 };
 
   return (
     <div className="md:pt-8 p-4 max-w-7xl mx-auto">
@@ -660,8 +714,44 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
                     </div>
                   </div>
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Link da Imagem (HD)</label>
-                  <input value={newProductImage} onChange={e => setNewProductImage(e.target.value)} className="w-full px-4 py-3 bg-white/50 border border-slate-100 rounded-xl outline-none text-[11px] font-mono" placeholder="https://..." />
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Imagem do Produto (HD)</label>
+                    {newProductImage && (
+                      <button type="button" onClick={() => setNewProductImage("")} className="text-[9px] text-red-500 font-bold uppercase hover:underline">Remover</button>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-3">
+                    {newProductImage && (
+                      <div className="relative w-full h-32 rounded-2xl overflow-hidden border-2 border-orange-100 group">
+                        <img src={newProductImage} className="w-full h-full object-cover" alt="Preview" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                           <span className="text-white text-[10px] font-black uppercase tracking-widest">Visualização Real</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div className="flex gap-2">
+                       <label className="flex-1 flex items-center justify-center gap-2 py-3 bg-orange-600 text-white rounded-xl font-black uppercase tracking-widest text-[9px] cursor-pointer hover:bg-orange-700 transition shadow-lg shadow-orange-100 disabled:opacity-50">
+                         <input 
+                           type="file" 
+                           className="hidden" 
+                           accept="image/*" 
+                           onChange={handleProductImageUpload}
+                           disabled={uploadingImage}
+                         />
+                         {uploadingImage ? <RefreshCw className="animate-spin" size={12} /> : <Upload size={12} />}
+                         {uploadingImage ? "Subindo..." : "Pegar do Computador"}
+                       </label>
+                       
+                       <input 
+                         value={newProductImage && !newProductImage.startsWith('http') ? "" : newProductImage} 
+                         onChange={e => setNewProductImage(e.target.value)} 
+                         className="flex-[1.5] px-4 py-3 bg-white/50 border border-slate-100 rounded-xl outline-none text-[10px] font-mono" 
+                         placeholder="Ou cole o link HD aqui..." 
+                       />
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -940,12 +1030,19 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
               </div>
 
               <div className="grid md:grid-cols-3 gap-6 mb-10">
-                {SAAS_PLANS.map(plan => (
-                   <div key={plan.id} className={cn("p-6 rounded-3xl border-2 transition-all", selectedPlanId === plan.id ? "border-purple-600 bg-purple-50/50" : "border-gray-100 hover:border-purple-200")}>
-                      <h3 className="font-black text-lg mb-1">{plan.name}</h3>
-                      <p className="text-2xl font-black text-purple-600 mb-4">R$ {plan.price.toFixed(2)}</p>
-                      <button onClick={() => handleSelectPlan(plan.id)} disabled={selectedPlanId === plan.id || changingPlan} className="w-full py-2 bg-white border border-gray-200 rounded-xl text-sm font-bold hover:border-purple-600 disabled:opacity-50">
-                        {selectedPlanId === plan.id ? 'Plano Atual' : 'Escolher'}
+                {saasPlans.map(plan => (
+                   <div key={plan.id} className={cn("p-6 rounded-3xl border-2 transition-all flex flex-col justify-between", selectedPlanId === plan.slug ? "border-purple-600 bg-purple-50/50" : "border-gray-100 hover:border-purple-200")}>
+                      <div>
+                        <h3 className="font-black text-lg mb-1">{plan.name}</h3>
+                        <p className="text-2xl font-black text-purple-600 mb-4">R$ {Number(plan.price).toFixed(2)}</p>
+                        <p className="text-[10px] text-gray-500 font-bold uppercase mb-4 italic leading-tight">{plan.description}</p>
+                      </div>
+                      <button 
+                        onClick={() => handleSelectPlan(plan.slug)} 
+                        disabled={selectedPlanId === plan.slug || changingPlan} 
+                        className="w-full py-2 bg-white border border-gray-200 rounded-xl text-sm font-bold hover:border-purple-600 disabled:opacity-50"
+                      >
+                        {selectedPlanId === plan.slug ? 'Plano Atual' : 'Escolher'}
                       </button>
                    </div>
                 ))}
@@ -953,14 +1050,47 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
 
               <div className="text-center pt-8 border-t border-gray-100">
                    {saasPixData ? (
-                     <div className="bg-gray-50 p-6 rounded-3xl border border-gray-100 inline-block">
-                        <img src={`data:image/png;base64,${saasPixData.qr_code_base64}`} className="w-48 h-48 mx-auto mb-4" alt="PIX" />
-                        <p className="text-[10px] font-mono break-all line-clamp-2 max-w-[200px]">{saasPixData.qr_code}</p>
+                     <div className="bg-gray-50 p-10 rounded-[2.5rem] border border-gray-100 inline-block text-center shadow-inner relative overflow-hidden group">
+                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-indigo-600" />
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-6 italic">Escaneie para Ativar</h4>
+                        <div className="bg-white p-4 rounded-3xl shadow-xl inline-block mb-6 border border-slate-100">
+                          <img src={`data:image/png;base64,${saasPixData.qr_code_base64}`} className="w-48 h-48 mx-auto" alt="PIX" />
+                        </div>
+                        
+                        <div className="space-y-3">
+                           <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter max-w-[200px] mx-auto opacity-60">Após o pagamento, sua loja será ativada automaticamente em até 1 minuto.</p>
+                           <button 
+                             onClick={() => {
+                               navigator.clipboard.writeText(saasPixData.qr_code);
+                               notify("Chave PIX copiada!", "success");
+                             }}
+                             className="w-full py-4 bg-white border-2 border-slate-100 rounded-2xl text-[10px] font-black uppercase tracking-widest hover:border-purple-600 transition-all flex items-center justify-center gap-2"
+                           >
+                             Copia e Cola
+                           </button>
+                        </div>
                      </div>
                    ) : (
-                     <button onClick={generateSaasPix} disabled={generatingSaasPix} className="px-10 py-4 bg-black text-white rounded-2xl font-black uppercase tracking-widest text-sm hover:scale-105 transition-all flex items-center justify-center gap-2 mx-auto">
-                       <QrCode size={20} /> Gerar PIX Mensalidade
-                     </button>
+                     <div className="space-y-6">
+                        {selectedPlanId !== currentOrg?.plan && saasPlans.find(p => p.slug === selectedPlanId)?.price > (saasPlans.find(p => p.slug === currentOrg?.plan)?.price || 0) && (
+                          <div className="max-w-md mx-auto p-4 bg-orange-50 border border-orange-100 rounded-2xl flex items-center gap-3 text-orange-700">
+                             <AlertCircle size={20} className="shrink-0" />
+                             <p className="text-[10px] font-bold leading-tight text-left">
+                               Atenção: Ao realizar o Upgrade agora, o tempo restante do seu plano atual será descartado e o novo plano entra em vigor imediatamente após o pagamento integral.
+                             </p>
+                          </div>
+                        )}
+                        <button 
+                          onClick={generateSaasPix} 
+                          disabled={generatingSaasPix || !selectedPlanId} 
+                          className="px-10 py-5 bg-gradient-to-r from-slate-900 to-black text-white rounded-[2rem] font-black uppercase tracking-[0.2em] text-xs hover:scale-105 transition-all flex items-center justify-center gap-3 mx-auto shadow-2xl shadow-black/20 disabled:opacity-50"
+                        >
+                          <QrCode size={20} /> 
+                          {generatingSaasPix ? 'Processando...' : 
+                           (selectedPlanId !== currentOrg?.plan && saasPlans.find(p => p.slug === selectedPlanId)?.price > (saasPlans.find(p => p.slug === currentOrg?.plan)?.price || 0)) ? 'Confirmar Upgrade' : 
+                           'Gerar PIX Mensalidade'}
+                        </button>
+                     </div>
                    )}
               </div>
            </div>

@@ -52,7 +52,7 @@ const AppContent = () => {
 
   if (loading) return <LoadingScreen />;
 
-  const hideNavbar = ['/login', '/register', '/start', '/courier'].includes(location.pathname) || !user;
+  const hideNavbar = ['/login', '/register', '/start', '/courier', '/saas'].includes(location.pathname) || !user;
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
@@ -133,6 +133,7 @@ const AppContent = () => {
 
             {/* Fallback */}
             <Route path="/" element={
+              user?.role === 'super_admin' ? <Navigate to="/saas" replace /> :
               user?.role === 'courier' ? <Navigate to="/courier" replace /> :
               org ? <SalesPage /> : 
               (user ? <Navigate to="/admin" replace /> : <Navigate to="/login" replace />)
