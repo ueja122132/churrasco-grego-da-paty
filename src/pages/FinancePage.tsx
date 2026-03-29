@@ -14,7 +14,8 @@ import {
   ShoppingCart,
   Layers,
   Trash2,
-  Percent
+  Percent,
+  Edit2
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTenant } from "../context/TenantContext";
@@ -48,9 +49,18 @@ export const FinancePage = () => {
 
   // Batch Entry State
   const [isAddingPurchase, setIsAddingPurchase] = useState(false);
+  const [isAddingNewMaterial, setIsAddingNewMaterial] = useState(false);
   const [selectedInsumo, setSelectedInsumo] = useState<string>("");
   const [purchaseWeight, setPurchaseWeight] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
+
+  const [newMaterial, setNewMaterial] = useState({
+    name: "",
+    unit: "Kg",
+    category: "Proteína",
+    initial_cost: ""
+  });
+  const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
 
   // Dashboard Metrics & Filters
   const [selectedPeriod, setSelectedPeriod] = useState<'today' | '7d' | 'month' | 'all'>('today');
@@ -129,6 +139,57 @@ export const FinancePage = () => {
       setPurchaseWeight("");
     } catch (err: any) {
       notify("Erro ao atualizar custo: " + err.message, "error");
+    }
+  };
+
+  const handleCreateMaterial = async () => {
+    if (!org || !newMaterial.name || !newMaterial.unit) return;
+    try {
+      if (editingMaterialId) {
+        // Mode: Update
+        const { error } = await supabase.from('inventory_items').update({
+          name: newMaterial.name,
+          unit: newMaterial.unit,
+          category: newMaterial.category,
+          current_avg_cost: parseFloat(newMaterial.initial_cost) || 0,
+          updated_at: new Date().toISOString()
+        }).eq('id', editingMaterialId);
+
+        if (error) throw error;
+        notify("Material atualizado!", "success");
+      } else {
+        // Mode: Create
+        const { error } = await supabase.from('inventory_items').insert([{
+          name: newMaterial.name,
+          unit: newMaterial.unit,
+          category: newMaterial.category,
+          current_avg_cost: parseFloat(newMaterial.initial_cost) || 0,
+          org_id: org.id,
+          updated_at: new Date().toISOString()
+        }]);
+
+        if (error) throw error;
+        notify("Material cadastrado!", "success");
+      }
+
+      setIsAddingNewMaterial(false);
+      setEditingMaterialId(null);
+      setNewMaterial({ name: "", unit: "Kg", category: "Proteína", initial_cost: "" });
+      fetchData();
+    } catch (err: any) {
+      notify("Erro ao salvar: " + err.message, "error");
+    }
+  };
+
+  const handleDeleteMaterial = async (id: string) => {
+    if (!confirm("Excluir este material permanentemente? Isso pode afetar o cálculo de custo de pratos que usam este insumo.")) return;
+    try {
+      const { error } = await supabase.from('inventory_items').delete().eq('id', id);
+      if (error) throw error;
+      notify("Material excluído!", "success");
+      fetchData();
+    } catch (err: any) {
+      notify("Erro ao excluir: " + err.message, "error");
     }
   };
 
@@ -545,12 +606,20 @@ export const FinancePage = () => {
                   <h2 className="text-2xl font-black text-gray-900">Gerenciar Materiais</h2>
                   <p className="text-sm text-gray-400">Cadastre aqui proteínas, bebidas e embalagens</p>
                </div>
-               <button 
-                onClick={() => setIsAddingPurchase(true)}
-                className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:scale-105 transition-transform shadow-lg shadow-orange-100"
-               >
-                 <Plus size={20} /> Registrar Compra
-               </button>
+               <div className="flex items-center gap-3">
+                 <button 
+                   onClick={() => setIsAddingNewMaterial(true)}
+                   className="bg-white text-orange-600 border-2 border-orange-100 px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:bg-orange-50 transition-colors shadow-sm"
+                 >
+                   <Plus size={20} /> Novo Insumo
+                 </button>
+                 <button 
+                  onClick={() => setIsAddingPurchase(true)}
+                  className="bg-orange-600 text-white px-6 py-3 rounded-2xl font-bold flex items-center gap-2 hover:scale-105 transition-transform shadow-lg shadow-orange-100"
+                 >
+                   <ShoppingCart size={20} /> Registrar Compra
+                 </button>
+               </div>
              </div>
 
              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -558,7 +627,31 @@ export const FinancePage = () => {
                   <div key={item.id} className="p-5 bg-gray-50 rounded-3xl border border-gray-100 group hover:border-orange-200 transition-colors">
                     <div className="flex justify-between items-start mb-2">
                        <span className="text-[10px] font-black uppercase text-orange-600 tracking-widest bg-orange-50 px-2 py-0.5 rounded-full">{(item as any).category || 'Material'}</span>
-                       <span className="text-[10px] text-gray-400">{new Date(item.updated_at).toLocaleDateString()}</span>
+                       <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => {
+                              setEditingMaterialId(item.id);
+                              setNewMaterial({
+                                name: item.name,
+                                unit: item.unit,
+                                category: (item as any).category || "Proteína",
+                                initial_cost: String(item.current_avg_cost || "")
+                              });
+                              setIsAddingNewMaterial(true);
+                            }}
+                            className="p-1.5 bg-white text-indigo-600 rounded-lg shadow-sm hover:bg-indigo-50"
+                            title="Editar Material"
+                          >
+                             <Edit2 size={14} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteMaterial(item.id)}
+                            className="p-1.5 bg-white text-red-600 rounded-lg shadow-sm hover:bg-red-50"
+                            title="Excluir Material"
+                          >
+                             <Trash2 size={14} />
+                          </button>
+                       </div>
                     </div>
                     <h3 className="text-lg font-black text-gray-800 mb-1">{item.name}</h3>
                     <p className="text-2xl font-black text-orange-600">
@@ -839,6 +932,98 @@ export const FinancePage = () => {
                     Adicionar na Receita
                   </button>
                </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL NEW MATERIAL (Cadastrar Novo Insumo) */}
+      <AnimatePresence>
+        {isAddingNewMaterial && (
+          <div className="fixed inset-0 z-[125] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} 
+              animate={{ scale: 1, opacity: 1 }} 
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-lg rounded-[3rem] p-10 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-8">
+                <h3 className="text-2xl font-black text-gray-900 flex items-center gap-2">
+                  <Layers className="text-orange-600" /> {editingMaterialId ? "Editar Material" : "Novo Material"}
+                </h3>
+                <button 
+                  onClick={() => setIsAddingNewMaterial(false)} 
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                  aria-label="Fechar"
+                >
+                  <X />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-black text-gray-400 uppercase mb-2 tracking-widest">Nome do Insumo</label>
+                  <input 
+                    type="text"
+                    placeholder="Ex: Carne de Filé"
+                    value={newMaterial.name}
+                    onChange={(e) => setNewMaterial(p => ({ ...p, name: e.target.value }))}
+                    className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-black text-gray-400 uppercase mb-2 tracking-widest">Unidade</label>
+                    <select 
+                      title="Selecione a unidade de medida"
+                      value={newMaterial.unit}
+                      onChange={(e) => setNewMaterial(p => ({ ...p, unit: e.target.value }))}
+                      className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
+                    >
+                      <option value="Kg">Kg</option>
+                      <option value="Gramas">Gramas</option>
+                      <option value="Un">Unidade</option>
+                      <option value="ML">ML</option>
+                      <option value="L">Litro</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-black text-gray-400 uppercase mb-2 tracking-widest">Categoria</label>
+                    <select 
+                      title="Selecione a categoria do material"
+                      value={newMaterial.category}
+                      onChange={(e) => setNewMaterial(p => ({ ...p, category: e.target.value }))}
+                      className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
+                    >
+                      <option value="Proteína">Proteína</option>
+                      <option value="Bebida">Bebida</option>
+                      <option value="Embalagem">Embalagem</option>
+                      <option value="Insumo">Insumo Geral</option>
+                      <option value="Acompanhamento">Acompanhamento</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-gray-400 uppercase mb-2 tracking-widest">Custo Médio Inicial (R$)</label>
+                  <input 
+                    type="number"
+                    step="0.001"
+                    placeholder="0.00"
+                    value={newMaterial.initial_cost}
+                    onChange={(e) => setNewMaterial(p => ({ ...p, initial_cost: e.target.value }))}
+                    className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                <button 
+                  onClick={handleCreateMaterial}
+                  className="w-full py-5 bg-orange-600 text-white rounded-[2rem] font-black text-lg shadow-xl"
+                >
+                  {editingMaterialId ? "Salvar Alterações" : "Cadastrar Material"}
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

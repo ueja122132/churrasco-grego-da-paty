@@ -11,7 +11,9 @@ import {
   Mail,
   ChevronRight,
   Package,
-  Bike
+  Bike,
+  Edit,
+  Navigation
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { Link } from "react-router-dom";
@@ -19,13 +21,17 @@ import { useAuth } from '../context/AuthContext';
 import { useTenant } from '../context/TenantContext';
 import { cn, getTimeAgo } from '../lib/utils';
 import { supabase, socket } from '../supabase';
+import { LocationPicker } from '../components/LocationPicker';
+import { StaticMap } from '../components/StaticMap';
 
 export const AdminProfilePage = () => {
-  const { user, logout, login, refreshProfile } = useAuth();
+  const { user, logout, refreshProfile } = useAuth();
   const { org } = useTenant();
   const [activeOrders, setActiveOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [savingLocation, setSavingLocation] = useState(false);
+  const [showMap, setShowMap] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Forçar recarga das informações do perfil quando o usuário estiver disponível
@@ -75,6 +81,25 @@ export const AdminProfilePage = () => {
       alert("Erro ao enviar foto: " + error.message);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleUpdateLocation = async (lat: number, lng: number, address: string) => {
+    if (!user) return;
+    try {
+      setSavingLocation(true);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ latitude: lat, longitude: lng, address })
+        .eq('id', user.id);
+
+      if (error) throw error;
+      await refreshProfile();
+      setShowMap(false);
+    } catch (error: any) {
+      alert("Erro ao salvar localização: " + error.message);
+    } finally {
+      setSavingLocation(false);
     }
   };
 
@@ -343,6 +368,56 @@ export const AdminProfilePage = () => {
           </div>
         </div>
 
+        {/* 🛰️ Delivery Location Card */}
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-gray-100 flex flex-col group relative overflow-hidden">
+           <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
+              <MapPin size={100} fill="currentColor" />
+           </div>
+           
+           <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+            <MapPin size={24} className="text-orange-500" /> Local de Entrega
+           </h3>
+           
+           <div className="flex-1 space-y-4 relative z-10">
+              {user?.latitude && user?.longitude ? (
+                <div className="space-y-4">
+                  <StaticMap 
+                    lat={Number(user.latitude)} 
+                    lng={Number(user.longitude)} 
+                    className="h-32 bg-slate-50 rounded-2xl overflow-hidden border-2 border-slate-100 group-hover:border-orange-100 transition-colors shadow-inner"
+                  />
+                  <div className="p-4 bg-slate-50 rounded-2xl text-[11px] font-bold text-slate-600 leading-tight border border-transparent shadow-sm">
+                    {user.address || 'Localização sem endereço definido...'}
+                  </div>
+                  <button 
+                    onClick={() => setShowMap(true)}
+                    className="w-full py-4 rounded-2xl bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest hover:bg-orange-600 transition-all flex items-center justify-center gap-2 shadow-lg shadow-orange-900/5"
+                  >
+                    <Edit size={14} /> Atualizar Localização
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 px-4 text-center space-y-4">
+                  <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center text-orange-400 animate-pulse">
+                     <Navigation size={32} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-900">GPS não configurado</h4>
+                    <p className="text-[10px] font-medium text-slate-400 mt-1 max-w-[200px] mx-auto">
+                      Ative seu GPS para que os entregadores cheguem com precisão total.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setShowMap(true)}
+                    className="px-8 py-4 rounded-2xl bg-orange-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-slate-900 transition-all flex items-center justify-center gap-2 shadow-xl shadow-orange-200"
+                  >
+                    <MapPin size={14} /> Marcar no Mapa Agora
+                  </button>
+                </div>
+              )}
+           </div>
+        </div>
+
         <div className="bg-indigo-600 p-8 rounded-[2.5rem] text-white shadow-xl shadow-indigo-100 space-y-4 flex flex-col justify-center relative overflow-hidden group">
           {/* Decorative Stars */}
           <Star size={100} className="absolute -bottom-10 -right-10 text-white/5 -rotate-12 transition-transform group-hover:rotate-0 duration-700" fill="currentColor" />
@@ -366,6 +441,16 @@ export const AdminProfilePage = () => {
           </ul>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showMap && (
+          <LocationPicker 
+            onClose={() => setShowMap(false)}
+            onLocationSelected={handleUpdateLocation}
+            initialLocation={user?.latitude && user?.longitude ? { lat: Number(user.latitude), lng: Number(user.longitude) } : undefined}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };

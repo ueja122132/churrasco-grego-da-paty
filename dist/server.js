@@ -20,10 +20,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind6cHJpdXV4cm5iamtrb2lza3Z3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjQyMzA2NCwiZXhwIjoyMDg3OTk5MDY0fQ.ZChd-y5z2FrS1wWoDH5F0t7CK5ZsD6AoRUx1WD9TPlc";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 // Database persistence note: Migrating from SQLite to Supabase for production scalability.
+// ===================================
+// TURBO MODE - PERFORMANCE CACHE
+// ===================================
+const apiCache = new Map();
+const CACHE_TTL = 60 * 1000; // 1 Minute Cache for public GET routes
+function getCachedData(key) {
+    const cached = apiCache.get(key);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+        return cached.data;
+    }
+    return null;
+}
+function setCachedData(key, data) {
+    apiCache.set(key, { data, timestamp: Date.now() });
+}
+// Invalidate cache on mutations
+function invalidateOrgCache(orgId) {
+    apiCache.delete(`products:${orgId}`);
+    apiCache.delete(`extras:${orgId}`);
+    // We don't delete 'detect' because it's usually based on hostname or slug which rarely change
+}
 // Password Hashing Utility
 function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');
@@ -121,20 +142,16 @@ async function startServer() {
             res.status(500).send('Internal Server Error');
         }
     });
-    // Simple in-memory cache for Org Detection
-    const orgCache = new Map();
-    const CACHE_TTL = 1000 * 60 * 5; // 5 minutes
     // SaaS Tenant Lookup via Domain or Slug
     app.get("/api/org/detect", async (req, res) => {
         const host = req.query.host || req.hostname;
         const fallbackSlug = req.query.slug;
         const orgId = req.query.orgId;
-        const cacheKey = `${host}-${fallbackSlug}-${orgId}`;
+        const cacheKey = `detect:${host}-${fallbackSlug}-${orgId}`;
         // Check Cache
-        const cached = orgCache.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-            return res.json(cached.data);
-        }
+        const cached = getCachedData(cacheKey);
+        if (cached)
+            return res.json(cached);
         console.log(`[BACKEND] Detecting org for host: ${host}, fallback: ${fallbackSlug}`);
         try {
             // Execution in parallel or sequential if needed, but optimized
@@ -162,7 +179,7 @@ async function startServer() {
             const sanitizedData = { ...data, has_mp_token: !!data.mp_access_token };
             delete sanitizedData.mp_access_token;
             // Update Cache
-            orgCache.set(cacheKey, { data: sanitizedData, timestamp: Date.now() });
+            setCachedData(cacheKey, sanitizedData);
             res.json(sanitizedData);
         }
         catch (err) {
@@ -381,6 +398,13 @@ async function startServer() {
                 console.error("[CREATE ORG ERROR]", error);
                 return res.status(500).json({ error: error.message });
             }
+            // If there is an owner, update their profile with the new org_id
+            if (owner_id) {
+                await supabase
+                    .from('profiles')
+                    .update({ org_id: data.id, role: 'admin' })
+                    .eq('id', owner_id);
+            }
             res.json(data);
         }
         catch (err) {
@@ -425,44 +449,6 @@ async function startServer() {
         }
         catch (err) {
             res.status(500).json({ error: "Erro ao gerar métricas" });
-        }
-    });
-    // Emergency RLS Fix Route (LIVRE PARA REPARO RÁPIDO)
-    app.post("/api/fix-rls", async (req, res) => {
-        console.log("[ADMIN_FIX] Iniciando reparo de RLS em saas_logs...");
-        // Import pg for admin fixes
-        const { Client } = await import('pg');
-        const client = new Client({
-            host: 'aws-0-sa-east-1.pooler.supabase.com',
-            port: 6543,
-            user: 'postgres.wzpriuuxrnbjkkoiskvw',
-            password: 'V2jZcOUe4I945WLx',
-            database: 'postgres',
-            ssl: { rejectUnauthorized: false }
-        });
-        try {
-            await client.connect();
-            console.log("[ADMIN_FIX] Conectado ao banco de dados!");
-            await client.query(`
-        -- Desabilitar RLS e garantir permissões
-        ALTER TABLE public.saas_logs DISABLE ROW LEVEL SECURITY;
-        GRANT ALL ON TABLE public.saas_logs TO authenticated;
-        GRANT ALL ON TABLE public.saas_logs TO service_role;
-        GRANT ALL ON TABLE public.saas_logs TO anon;
-        
-        -- Garantir políticas básicas de visualização em organizations também
-        DROP POLICY IF EXISTS "Allow all for organizations" ON organizations;
-        CREATE POLICY "Allow all for organizations" ON organizations FOR ALL USING (true) WITH CHECK (true);
-      `);
-            console.log("[ADMIN_FIX] Reparo concluído com sucesso!");
-            res.json({ success: true, message: "RLS desabilitado e permissões restauradas." });
-        }
-        catch (err) {
-            console.error("[ADMIN_FIX_ERROR] Erro no reparo:", err);
-            res.status(500).json({ error: err.message });
-        }
-        finally {
-            await client.end();
         }
     });
     // Create new organization with logging
@@ -624,7 +610,7 @@ async function startServer() {
             const [ordersRes, expensesRes, profilesRes] = await Promise.all([
                 supabaseAdmin.from('orders').select('org_id, total_price, created_at, customer_phone'),
                 supabaseAdmin.from('expenses').select('org_id, amount, created_at'),
-                supabaseAdmin.from('profiles').select('org_id') // Count all profiles linked to the org
+                supabaseAdmin.from('profiles').select('id, org_id, phone'), // Count all profiles linked to the org
             ]);
             if (ordersRes.error)
                 return res.status(500).json({ error: ordersRes.error.message });
@@ -639,9 +625,12 @@ async function startServer() {
                 const orgExpenses = (expensesRes.data || []).filter(e => String(e.org_id) === String(org.id));
                 const orgProfiles = (profilesRes.data || []).filter(p => String(p.org_id) === String(org.id));
                 console.log(`[ORG-METRICS] ${org.slug}: ${orgOrders.length} orders found`);
-                // Calculate unique customers based on store specific profile OR unique phone in orders
-                const orderPhones = new Set(orgOrders.map(o => o.customer_phone).filter(Boolean));
-                const totalClients = Math.max(orgProfiles.length, orderPhones.size);
+                // Calculate unique customers based on store specific profiles AND unique phones in orders
+                const orgProfilePhones = orgProfiles.map(p => p.phone?.replace(/\D/g, '')).filter(Boolean);
+                const orderPhonesSubset = orgOrders.map(o => o.customer_phone?.replace(/\D/g, '')).filter(Boolean);
+                // Also consider profiles without phones (identified by ID)
+                const profilesWithoutPhone = orgProfiles.filter(p => !p.phone).map(p => p.id);
+                const totalClients = new Set([...orgProfilePhones, ...orderPhonesSubset, ...profilesWithoutPhone]).size;
                 // Sales/Orders Metrics
                 const totalSales = orgOrders.reduce((sum, o) => sum + Number(o.total_price || 0), 0);
                 const todayOrders = orgOrders.filter(o => o.created_at >= startOfDay).length;
@@ -1427,7 +1416,7 @@ async function startServer() {
                         details: `Loja ${org.name} mudou para o plano ${newPlan.name} (Downgrade/Lateral). Tempo restante mantido.`,
                         org_id: org.id
                     }]);
-                orgCache.clear();
+                apiCache.clear();
                 return res.json({ success: true, message: `Plano alterado para ${newPlan.name} com sucesso!` });
             }
             // RULE: If Upgrade or Renewal (New Price > 0)
@@ -1509,7 +1498,7 @@ async function startServer() {
             const { data, error } = await supabase.from('organizations').update({ branding: newBranding }).eq('id', req.params.id).select().single();
             if (error)
                 return res.status(500).json({ error: error.message });
-            orgCache.clear(); // Important: Clear cache on update
+            apiCache.clear(); // Important: Clear cache on update
             res.json({ success: true, org: data });
         }
         catch (err) {
@@ -1527,7 +1516,7 @@ async function startServer() {
                 .single();
             if (error)
                 return res.status(500).json({ error: error.message });
-            orgCache.clear(); // Important: Clear cache on update
+            apiCache.clear(); // Unificado
             res.json({ success: true, org: data });
         }
         catch (err) {
@@ -1546,7 +1535,7 @@ async function startServer() {
                 .single();
             if (error)
                 return res.status(500).json({ error: error.message });
-            orgCache.clear(); // Important: Clear cache on update
+            apiCache.clear(); // Unificado
             res.json({ success: true, org: data });
         }
         catch (err) {
@@ -1565,7 +1554,7 @@ async function startServer() {
                 .single();
             if (error)
                 return res.status(500).json({ error: error.message });
-            orgCache.clear(); // Important: Clear cache on update
+            apiCache.clear(); // Unificado
             res.json({ success: true, org: data });
         }
         catch (err) {
@@ -1843,7 +1832,7 @@ async function startServer() {
                 .single();
             if (error)
                 throw error;
-            orgCache.clear(); // Important: Clear cache on update
+            apiCache.clear(); // Unificado
             res.json(data);
         }
         catch (err) {
@@ -2220,7 +2209,12 @@ async function startServer() {
     });
     // API Routes (Tenant-aware)
     app.get("/api/:orgId/products", async (req, res) => {
+        const cacheKey = `products:${req.params.orgId}`;
+        const cached = getCachedData(cacheKey);
+        if (cached)
+            return res.json(cached);
         const { data } = await supabase.from('products').select('*').eq('org_id', req.params.orgId);
+        setCachedData(cacheKey, data);
         res.json(data);
     });
     app.get("/api/:orgId/clients", async (req, res) => {
@@ -2228,7 +2222,7 @@ async function startServer() {
             const orgId = req.params.orgId;
             // Fetch profiles (registered users) and orders in parallel
             const [profilesRes, ordersRes] = await Promise.all([
-                supabase.from('profiles').select('id, name, email, phone, created_at, avatar_url').eq('role', 'user'),
+                supabase.from('profiles').select('id, name, email, phone, created_at, avatar_url').eq('role', 'user').eq('org_id', orgId),
                 supabase.from('orders').select('customer_name, customer_phone, total_price, created_at, status, payment_status').eq('org_id', orgId)
             ]);
             if (profilesRes.error)
@@ -2296,6 +2290,7 @@ async function startServer() {
             }]).select().maybeSingle();
         if (error)
             return res.status(500).json({ error: error.message });
+        apiCache.clear(); // Clear all read cache on product change
         res.json(data);
     });
     app.post("/api/:orgId/products", billingGuard, checkSaaSLimits('products'), async (req, res) => {
@@ -2307,6 +2302,7 @@ async function startServer() {
     });
     app.delete("/api/products/:id", async (req, res) => {
         await supabase.from('products').delete().eq('id', req.params.id);
+        apiCache.clear();
         res.json({ success: true });
     });
     app.patch("/api/products/:id", async (req, res) => {
@@ -2326,7 +2322,12 @@ async function startServer() {
         res.json(data);
     });
     app.get("/api/:orgId/extra-ingredients", async (req, res) => {
+        const cacheKey = `extras:${req.params.orgId}`;
+        const cached = getCachedData(cacheKey);
+        if (cached)
+            return res.json(cached);
         const { data } = await supabase.from('extra_ingredients').select('*').eq('org_id', req.params.orgId);
+        setCachedData(cacheKey, data);
         res.json(data);
     });
     app.post("/api/:orgId/extra-ingredients", billingGuard, checkSaaSLimits('products'), async (req, res) => {
@@ -2856,9 +2857,15 @@ Diretrizes:
         const isCompiled = __dirname.endsWith('dist') || __dirname.includes('/dist/') || __dirname.includes('\\dist');
         const distPath = isCompiled ? __dirname : path.join(__dirname, "dist");
         console.log(`[SERVER] Serving static files from: ${distPath}`);
-        app.use(express.static(distPath));
+        app.use(express.static(distPath, {
+            maxAge: '1y',
+            immutable: true,
+            index: false
+        }));
         app.get("*", (req, res) => {
-            res.sendFile(path.join(distPath, "index.html"));
+            res.sendFile(path.join(distPath, "index.html"), {
+                headers: { 'Cache-Control': 'no-cache' } // HTML always fresh
+            });
         });
     }
     // Global Error Handler (Sanitized)

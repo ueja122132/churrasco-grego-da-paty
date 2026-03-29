@@ -28,6 +28,7 @@ import { useNotification } from "../context/NotificationContext";
 import { supabase, socket } from "../supabase";
 import { Product, OrderItem, Order, ExtraIngredient } from "../types";
 import { cn } from "../lib/utils";
+import { LocationPicker } from "../components/LocationPicker";
 
 export const SalesPage = () => {
   const { user, login, logout } = useAuth();
@@ -74,6 +75,8 @@ export const SalesPage = () => {
   const [pixLoading, setPixLoading] = useState(false);
   const [pixCopied, setPixCopied] = useState(false);
   const [useReward, setUseReward] = useState(false);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   const getStoreStatusMessage = () => {
     if (!org?.operating_hours) return "Loja Aberta";
@@ -261,6 +264,7 @@ export const SalesPage = () => {
 
   const addToCart = (product: Product, selectedIngredients: string[], extras: ExtraIngredient[]) => {
     if (!user) {
+      setSelectedProduct(null); // Fechar modal de ingredientes antes de pedir login
       setNeedsLogin(true);
       return;
     }
@@ -332,6 +336,12 @@ export const SalesPage = () => {
       return;
     }
     if (cart.length === 0) return;
+
+    // Verificar se o usuário tem localização salva (Latitude/Longitude são obrigatórios agora)
+    if (!user.latitude || !user.longitude) {
+      setShowLocationPicker(true);
+      return;
+    }
 
     if (!checkIfOpen()) {
       notify("Desculpe, a loja fechou enquanto você montava seu pedido.", "warning");
@@ -413,6 +423,34 @@ export const SalesPage = () => {
       notify(err.message || "Erro ao finalizar pedido. Tente novamente.", "error");
     } finally {
       setIsOrdering(false);
+    }
+  };
+
+  const handleLocationDuringCheckout = async (lat: number, lng: number, address: string) => {
+    if (!user) return;
+    try {
+      setIsUpdatingProfile(true);
+      // Salvar no perfil para uso futuro
+      const { error } = await supabase
+        .from('profiles')
+        .update({ latitude: lat, longitude: lng, address })
+        .eq('id', user.id);
+
+      if (error) throw error;
+      
+      // Atualizar estado local do user no AuthContext
+      await login({ ...user, latitude: lat, longitude: lng, address });
+      
+      setShowLocationPicker(false);
+      // O useEffect ou a próxima tentativa de placeOrder agora terá as coordenadas
+      notify("Localização salva! Finalizando seu pedido...", "success");
+      
+      // Chamada recursiva ou trigger para finalizar o pedido agora que tem GPS
+      setTimeout(() => placeOrder(), 500);
+    } catch (error: any) {
+      alert("Erro ao salvar localização: " + error.message);
+    } finally {
+      setIsUpdatingProfile(false);
     }
   };
 
@@ -747,7 +785,7 @@ export const SalesPage = () => {
 
           <div className="space-y-4">
             {needsLogin && (
-              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setNeedsLogin(false)}>
+              <div className="fixed inset-0 z-[150] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setNeedsLogin(false)}>
                 <div className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
                   <div className="w-12 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
                   <div className="text-center mb-6">
@@ -825,6 +863,16 @@ export const SalesPage = () => {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showLocationPicker && (
+          <LocationPicker 
+            onClose={() => setShowLocationPicker(false)}
+            onLocationSelected={handleLocationDuringCheckout}
+            initialLocation={user?.latitude && user?.longitude ? { lat: Number(user.latitude), lng: Number(user.longitude) } : undefined}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Customization Modal */}
       <AnimatePresence>

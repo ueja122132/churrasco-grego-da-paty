@@ -14,10 +14,12 @@ import { useNotification } from "../context/NotificationContext";
 import { supabase } from "../supabase";
 import { cn } from "../lib/utils";
 import { useLocation } from "react-router-dom";
+import { useTenant } from "../context/TenantContext";
 
 export const RegisterPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { org } = useTenant();
   const searchParams = new URLSearchParams(location.search);
   const isPartner = searchParams.get('type') === 'partner';
 
@@ -42,7 +44,9 @@ export const RegisterPage = () => {
         options: {
           data: { 
             name: formData.name,
-            phone: formData.phone
+            phone: formData.phone,
+            org_id: org?.id,
+            role: isPartner ? 'admin' : 'user'
           }
         }
       });

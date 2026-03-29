@@ -90,7 +90,7 @@ export const LoginPage = () => {
     try {
       const res = await fetch("/api/auth/reset-password", {
         method: "POST",
-        headers: "application/json",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ identifier: recuperarId, newPassword: recoverPassword })
       });
       const data = await res.json();
@@ -123,9 +123,9 @@ export const LoginPage = () => {
           <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.5 }}>
              <h1 className="text-6xl font-black tracking-tighter mb-4 leading-none text-white drop-shadow-2xl uppercase">
                {org?.name ? (
-                 <>A MELHOR <br/><span className="text-orange-500">{org.name}</span> <br/>DA CIDADE</>
+                 <><span className="text-orange-500">{org.name}</span> <br/>O MELHOR <br/>DA CIDADE</>
                ) : (
-                 <>O MELHOR <br/><span className="text-orange-500">CHURRASCO</span> <br/>DA CIDADE</>
+                 <><span className="text-orange-500">CHURRASCO</span> <br/>O MELHOR <br/>DA CIDADE</>
                )}
              </h1>
              <p className="text-slate-300 font-bold text-lg max-w-xs leading-tight opacity-70">
