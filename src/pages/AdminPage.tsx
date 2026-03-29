@@ -22,7 +22,8 @@ import {
   Upload,
   Image as ImageIcon,
   Check,
-  RefreshCw
+  RefreshCw,
+  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from '../lib/utils';
@@ -60,6 +61,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const [currentOrg, setCurrentOrg] = useState(org);
   const [localLoading, setLocalLoading] = useState(!org);
   const [activeTab, setActiveTab] = useState('metrics');
+  const isSuperAdmin = user?.role === 'super_admin';
   
   // Products states
   const [products, setProducts] = useState<Product[]>([]);
@@ -543,14 +545,40 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
 
   return (
     <div className="md:pt-8 p-4 max-w-7xl mx-auto">
-      <header className="mb-10">
-        <h1 className="text-5xl font-extrabold text-slate-900 tracking-tight flex items-center gap-4">
-          <div className="w-14 h-14 bg-brand-primary/10 rounded-2xl flex items-center justify-center shadow-glow">
-            <Settings size={32} className="text-brand-primary animate-spin-slow" />
+      <header className="mb-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="flex-1">
+          <div className="flex items-center gap-4 mb-2">
+            <h1 className="text-4xl md:text-5xl font-black text-slate-900 tracking-tighter flex items-center gap-4">
+              <div className="w-12 h-12 bg-orange-600/10 rounded-2xl flex items-center justify-center text-orange-600">
+                <Settings size={32} />
+              </div>
+              Painel Administrativo
+            </h1>
+            
+            {isSuperAdmin && (
+              <motion.button
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                onClick={() => window.location.href = '/saas'}
+                className="hidden md:flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl shadow-indigo-500/30 hover:bg-indigo-700 transition-all"
+              >
+                <ShieldCheck size={16} />
+                Controle SaaS
+              </motion.button>
+            )}
           </div>
-          Painel Administrativo
-        </h1>
-        <p className="text-slate-500 mt-3 text-lg font-medium">Controle total da sua operação com inteligência e elegância</p>
+          <p className="text-slate-500 font-bold text-lg md:text-xl opacity-70">Controle total da sua operação com inteligência e elegância</p>
+        </div>
+        
+        {isSuperAdmin && (
+           <button
+             onClick={() => window.location.href = '/saas'}
+             className="md:hidden flex items-center justify-center gap-2 w-full py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px]"
+           >
+             <ShieldCheck size={16} />
+             Acessar SaaS Admin
+           </button>
+        )}
       </header>
 
       <div className="flex glass p-2 rounded-2xl mb-10 overflow-x-auto no-scrollbar gap-2 max-w-fit">
