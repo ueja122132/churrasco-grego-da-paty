@@ -131,13 +131,13 @@ const AppContent = () => {
             } />
             <Route path="/:slug" element={<SalesPage />} />
 
-            {/* Fallback */}
-            <Route path="/" element={
-              user?.role === 'super_admin' ? <Navigate to="/saas" replace /> :
-              user?.role === 'courier' ? <Navigate to="/courier" replace /> :
-              org ? <SalesPage /> : 
-              (user ? <Navigate to="/admin" replace /> : <Navigate to="/login" replace />)
-            } />
+             {/* Fallback & Home */}
+             <Route path="/" element={
+               user?.role === 'super_admin' ? <Navigate to="/saas" replace /> :
+               user?.role === 'courier' ? <Navigate to="/courier" replace /> :
+               org ? <SalesPage /> : 
+               <SubscribePage />
+             } />
 
           </Routes>
         </Suspense>

@@ -242,7 +242,7 @@ export const PlansView: React.FC = () => {
             <div className="mb-8">
                <div className="flex items-baseline gap-1">
                   <span className="text-sm font-black text-slate-400">R$</span>
-                  <span className="text-5xl font-black tracking-tighter">{Number(plan.price).toFixed(2).split('.')[0]}</span>
+                  <span className="text-5xl font-black tracking-tighter text-slate-900 dark:text-white">{Number(plan.price).toFixed(2).split('.')[0]}</span>
                   <span className="text-lg font-black text-slate-400">,{Number(plan.price).toFixed(2).split('.')[1]}</span>
                   <span className="text-xs font-bold text-slate-400 ml-1">/mês</span>
                </div>

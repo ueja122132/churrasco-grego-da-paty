@@ -49,10 +49,11 @@ export const MockCompanies = [
 ];
 
 export const MockPlans = [
-  { id: 'p1', name: 'Basic', price: 99.90, limits: { orders: 500, users: 2, storage: '1GB' }, features: ['Painel Admin', 'Cardápio Digital', 'WhatsApp Bot'] },
-  { id: 'p2', name: 'Pro', price: 199.90, limits: { orders: 2000, users: 5, storage: '5GB' }, features: ['Tudo do Basic', 'Gestão Financeira', 'Múltiplas Impressoras'] },
-  { id: 'p3', name: 'Premium', price: 399.90, limits: { orders: 'Ilimitado', users: 15, storage: '20GB' }, features: ['Tudo do Pro', 'App Próprio', 'Suporte VIP'] },
+  { id: 'p1', name: 'Basic', price: 20.00, limits: { orders: 500, users: 2, storage: '1GB' }, features: ['Painel Admin', 'Cardápio Digital', 'WhatsApp Bot'] },
+  { id: 'p2', name: 'Pro', price: 60.00, limits: { orders: 2000, users: 5, storage: '5GB' }, features: ['Tudo do Basic', 'Gestão Financeira', 'Múltiplas Impressoras'] },
+  { id: 'p3', name: 'Premium', price: 100.00, limits: { orders: 'Ilimitado', users: 15, storage: '20GB' }, features: ['Tudo do Pro', 'App Próprio', 'Suporte VIP'] },
 ];
+
 
 export const SystemLogs = [
   { id: 'l1', user: 'Admin Master', action: 'Alteração de Plano', target: 'Pizzaria do Bairro', date: '2026-03-28 14:30', type: 'info' },
