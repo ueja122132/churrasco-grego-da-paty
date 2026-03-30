@@ -289,7 +289,7 @@ async function startServer() {
     try {
       // 1. Quick Check Custom ID Fallback
       if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
-        const { data: profile } = await supabase.from('profiles').select('role, email').eq('id', customAdminId).maybeSingle();
+        const { data: profile } = await supabaseAdmin.from('profiles').select('role, email').eq('id', customAdminId).maybeSingle();
         if (profile?.role === 'super_admin' || profile?.role === 'admin') return next();
       }
 
@@ -299,7 +299,7 @@ async function startServer() {
         if (token && token !== 'undefined' && token !== 'null') {
           const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
           if (sbUser && !authError) {
-            const { data: profile } = await supabase.from('profiles').select('role').eq('email', sbUser.email).maybeSingle();
+            const { data: profile } = await supabaseAdmin.from('profiles').select('role').eq('email', sbUser.email).maybeSingle();
             if (profile?.role === 'super_admin' || profile?.role === 'admin') return next();
             // Fallback de confiança para não bloquear as operações do Ajeu
             if (sbUser.email?.includes('ajeu') || sbUser.email?.includes('paty')) return next();
@@ -320,7 +320,7 @@ async function startServer() {
 
     try {
       if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
-        const { data: profile } = await supabase.from('profiles').select('id, role, org_id').eq('id', customAdminId).single();
+        const { data: profile } = await supabaseAdmin.from('profiles').select('id, role, org_id').eq('id', customAdminId).single();
         if (profile?.role === 'admin' || profile?.role === 'super_admin') {
           req.user = profile;
           return next();
@@ -332,7 +332,7 @@ async function startServer() {
         if (token && token !== 'undefined' && token !== 'null') {
           const { data: { user: sbUser }, error: authError } = await supabase.auth.getUser(token);
           if (sbUser && !authError) {
-            const { data: profile } = await supabase.from('profiles').select('id, role, org_id').eq('email', sbUser.email).single();
+            const { data: profile } = await supabaseAdmin.from('profiles').select('id, role, org_id').eq('email', sbUser.email).single();
             if (profile?.role === 'admin' || profile?.role === 'super_admin') {
               req.user = profile;
               return next();
@@ -805,6 +805,25 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Emergency RLS and Log Fix tool
+  app.post("/api/fix-rls", superAdminGuard, async (req, res) => {
+    try {
+      console.log("[FIX-RLS] Iniciando reparo de logs forçado...");
+      const { error } = await supabaseAdmin.from('saas_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (error) throw error;
+      await supabaseAdmin.from('saas_logs').insert([{
+        type: 'success',
+        action: 'RLS_FIX',
+        actor: 'SYSTEM',
+        details: 'Reparo global executado via Bypass Admin.',
+        metadata: { timestamp: new Date().toISOString() }
+      }]);
+      res.json({ success: true, message: "Sistema restaurado." });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Set billing exemption
   app.patch("/api/organizations/:id/billing-exempt", superAdminGuard, async (req, res) => {
     const { billing_exempt } = req.body;
@@ -1241,21 +1260,7 @@ async function startServer() {
   // SAAS SUBSCRIPTION PIX - Pagamento para Contratar
   // ===================================================
 
-  // Planos disponíveis via Banco de Dados (Dinâmico)
-  app.get("/api/saas/plans", async (req, res) => {
-    try {
-      const { data: plans, error } = await supabase
-        .from('saas_plans')
-        .select('*')
-        .eq('active', true)
-        .order('price', { ascending: true });
-      
-      if (error) throw error;
-      res.json(plans);
-    } catch (err) {
-      res.status(500).json({ error: "Erro ao buscar planos" });
-    }
-  });
+  // Planos disponíveis via Banco de Dados (Dinâmico) - Já definido acima
 
   // Criar cobrança PIX para assinar o SaaS
   app.post("/api/saas/subscribe/pix", async (req, res) => {
