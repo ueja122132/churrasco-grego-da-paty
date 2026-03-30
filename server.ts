@@ -26,10 +26,13 @@ const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 // Robust Initialization Checks
-if (!supabaseUrl || !supabaseAnonKey) {
+if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
   console.error("\x1b[31m%s\x1b[0m", "=========================================================");
-  console.error("\x1b[31m%s\x1b[0m", "ERRO FATAL: VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY está faltando!");
-  console.error("\x1b[31m%s\x1b[0m", "Configure estas variáveis no painel da sua hospedagem.");
+  if (!supabaseUrl) console.error("\x1b[31m%s\x1b[0m", "ERRO: VITE_SUPABASE_URL está faltando!");
+  if (!supabaseAnonKey) console.error("\x1b[31m%s\x1b[0m", "ERRO: VITE_SUPABASE_ANON_KEY está faltando!");
+  if (!supabaseServiceKey) console.error("\x1b[31m%s\x1b[0m", "ERRO CRÍTICO: SUPABASE_SERVICE_ROLE_KEY está faltando!");
+  console.error("\x1b[31m%s\x1b[0m", "O SaaS Admin (Super Admin) NÃO VAI FUNCIONAR corretamente.");
+  console.error("\x1b[31m%s\x1b[0m", "Configure estas variáveis no seu .env.local ou painel.");
   console.error("\x1b[31m%s\x1b[0m", "=========================================================");
 }
 
@@ -287,10 +290,16 @@ async function startServer() {
     const path = req.path;
 
     try {
+      // 0. Logging para diagnóstico
+      console.log(`[AUTH-GUARD] Tentativa de acesso Super Admin a ${path}`);
+      
       // 1. Quick Check Custom ID Fallback
       if (customAdminId && customAdminId !== 'undefined' && customAdminId !== 'null') {
         const { data: profile } = await supabaseAdmin.from('profiles').select('role, email').eq('id', customAdminId).maybeSingle();
-        if (profile?.role === 'super_admin' || profile?.role === 'admin') return next();
+        if (profile?.role === 'super_admin' || profile?.role === 'admin') {
+           console.log(`[AUTH-GUARD] Acesso concedido via Header ID: ${profile.email}`);
+           return next();
+        }
       }
 
       // 2. Auth Header Check
