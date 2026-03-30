@@ -37,6 +37,10 @@ export const FinancePage = () => {
   const [products, setProducts] = useState<(Product & { ingredients: ProductIngredient[] })[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Mercado Pago Fee State
+  const [mpPixRate, setMpPixRate] = useState<number>(0.49); // 0.49% para PIX
+  const [mpCardRate, setMpCardRate] = useState<number>(3.49); // 3.49% para crédito à vista
+
   // Simulator State
   const [simQuantities, setSimQuantities] = useState<Record<number, number>>({});
   const [targetMargin, setTargetMargin] = useState<number>(50); // Default 50% profit margin
@@ -321,6 +325,12 @@ export const FinancePage = () => {
       return acc;
     }, 0);
 
+    // Mercado Pago fees: PIX = mpPixRate%, Card/others = mpCardRate%
+    const mpFees = filteredOrders.reduce((acc, o) => {
+      const rate = (o.payment_method === 'pix' || o.payment_status === 'paid_pix') ? mpPixRate : mpCardRate;
+      return acc + (o.total_price * (rate / 100));
+    }, 0);
+
     const expTotal = filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
     const avulsasTotal = filteredExpenses
       .filter(e => e.category === 'Avulsa')
@@ -332,11 +342,12 @@ export const FinancePage = () => {
       ticket,
       cmv,
       courierCosts,
+      mpFees,
       expenses: expTotal,
       avulsas: avulsasTotal,
-      netProfit: revenue - cmv - expTotal - courierCosts
+      netProfit: revenue - cmv - expTotal - courierCosts - mpFees
     };
-  }, [filteredOrders, filteredExpenses, productCosts]);
+  }, [filteredOrders, filteredExpenses, productCosts, mpPixRate, mpCardRate]);
 
   // Daily Report Data
   const reportData = useMemo(() => {
@@ -355,27 +366,34 @@ export const FinancePage = () => {
       }
       return acc;
     }, 0);
+    const mpFees = dayOrders.reduce((acc, o) => {
+      const rate = (o.payment_method === 'pix' || o.payment_status === 'paid_pix') ? mpPixRate : mpCardRate;
+      return acc + (o.total_price * (rate / 100));
+    }, 0);
     const expTotal = dayExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
 
     return {
       revenue,
       cmv,
       courierCosts,
+      mpFees,
       expenses: expTotal,
-      netProfit: revenue - cmv - courierCosts - expTotal,
+      netProfit: revenue - cmv - courierCosts - mpFees - expTotal,
       orders: dayOrders.map(o => {
         const orderCmv = o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0);
         const orderGrossProfit = Math.max(0, o.total_price - orderCmv);
         const orderCourier = o.courier_id ? (orderGrossProfit * 0.18) : 0;
+        const orderMpFee = o.total_price * ((o.payment_method === 'pix' || o.payment_status === 'paid_pix' ? mpPixRate : mpCardRate) / 100);
         return {
           ...o,
           cmv: orderCmv,
           courierCost: orderCourier,
-          profit: orderGrossProfit - orderCourier
+          mpFee: orderMpFee,
+          profit: orderGrossProfit - orderCourier - orderMpFee
         };
       })
     };
-  }, [orders, expenses, selectedReportDate, productCosts]);
+  }, [orders, expenses, selectedReportDate, productCosts, mpPixRate, mpCardRate]);
 
   // Quick Fix for CMV scaling bug (Molho/Pão)
   const handleRepairData = async () => {
@@ -552,8 +570,41 @@ export const FinancePage = () => {
              </div>
            </div>
 
-           {/* Metrics Grid (Image 2 Style - 5 Cards) */}
-           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+           {/* Mercado Pago Rate Config */}
+           <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex flex-wrap items-center gap-4">
+             <div className="flex items-center gap-2">
+               <span className="text-blue-600 text-lg">💳</span>
+               <span className="text-xs font-black text-blue-800 uppercase tracking-widest">Taxa Mercado Pago</span>
+             </div>
+             <div className="flex items-center gap-3 flex-wrap">
+               <label className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-blue-100 shadow-sm">
+                 <span className="text-xs font-bold text-blue-600">PIX</span>
+                 <input
+                   type="number" step="0.01" min="0" max="10"
+                   value={mpPixRate}
+                   onChange={e => setMpPixRate(parseFloat(e.target.value) || 0)}
+                   className="w-14 text-xs font-black text-center outline-none text-blue-800"
+                 />
+                 <span className="text-xs text-blue-400 font-bold">%</span>
+               </label>
+               <label className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-blue-100 shadow-sm">
+                 <span className="text-xs font-bold text-blue-600">Cartão</span>
+                 <input
+                   type="number" step="0.01" min="0" max="20"
+                   value={mpCardRate}
+                   onChange={e => setMpCardRate(parseFloat(e.target.value) || 0)}
+                   className="w-14 text-xs font-black text-center outline-none text-blue-800"
+                 />
+                 <span className="text-xs text-blue-400 font-bold">%</span>
+               </label>
+             </div>
+             <p className="text-[10px] text-blue-500 font-medium">
+               Taxa MP: <strong>{formatCurrency(financialMetrics.mpFees)}</strong> descontados do lucro neste período.
+             </p>
+           </div>
+
+           {/* Metrics Grid - 6 Cards */}
+           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100">
                 <p className="text-[10px] font-black text-gray-400 uppercase mb-1 tracking-widest">💰 Faturamento</p>
                 <p className="text-xl font-black text-gray-900">{formatCurrency(financialMetrics.revenue)}</p>
@@ -577,7 +628,11 @@ export const FinancePage = () => {
                    </div>
                  )}
               </div>
-              <div className={cn("p-5 rounded-[2rem] shadow-lg text-white transition-all", financialMetrics.netProfit >= 0 ? "bg-orange-600" : "bg-red-600")}>
+              <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-blue-100">
+                <p className="text-[10px] font-black text-blue-400 uppercase mb-1 tracking-widest">💳 Taxa MP</p>
+                <p className="text-xl font-black text-blue-600">- {formatCurrency(financialMetrics.mpFees)}</p>
+              </div>
+              <div className={cn("p-5 rounded-[2rem] shadow-lg text-white transition-all col-span-2 sm:col-span-1", financialMetrics.netProfit >= 0 ? "bg-orange-600" : "bg-red-600")}>
                 <p className="text-[10px] font-bold opacity-80 uppercase mb-1 tracking-widest text-white">📉 Lucro Líquido</p>
                 <p className="text-xl font-black text-white">{formatCurrency(financialMetrics.netProfit)}</p>
               </div>
@@ -989,25 +1044,30 @@ export const FinancePage = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
               <p className="text-gray-400 text-sm font-bold uppercase mb-1">Faturamento</p>
               <h3 className="text-2xl font-black text-gray-900">{formatCurrency(reportData.revenue)}</h3>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <p className="text-red-400 text-sm font-bold uppercase mb-1">Custo Insumos (CMV)</p>
-              <h3 className="text-2xl font-black text-gray-900 text-red-600">-{formatCurrency(reportData.cmv)}</h3>
+              <p className="text-red-400 text-sm font-bold uppercase mb-1">CMV (Insumos)</p>
+              <h3 className="text-2xl font-black text-red-600">-{formatCurrency(reportData.cmv)}</h3>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
               <p className="text-orange-400 text-sm font-bold uppercase mb-1">Entrega (18%)</p>
               <h3 className="text-2xl font-black text-orange-600">-{formatCurrency(reportData.courierCosts)}</h3>
             </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-blue-100">
+              <p className="text-blue-400 text-sm font-bold uppercase mb-1">💳 Taxa MP</p>
+              <h3 className="text-2xl font-black text-blue-600">-{formatCurrency(reportData.mpFees)}</h3>
+              <p className="text-[10px] text-blue-300 font-bold mt-1">PIX {mpPixRate}% / Cartão {mpCardRate}%</p>
+            </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <p className="text-blue-400 text-sm font-bold uppercase mb-1">Despesas Extras</p>
-              <h3 className="text-2xl font-black text-blue-600">-{formatCurrency(reportData.expenses)}</h3>
+              <p className="text-purple-400 text-sm font-bold uppercase mb-1">Despesas Extras</p>
+              <h3 className="text-2xl font-black text-purple-600">-{formatCurrency(reportData.expenses)}</h3>
             </div>
             <div className={cn(
-              "p-6 rounded-3xl shadow-lg border-2",
+              "p-6 rounded-3xl shadow-lg border-2 col-span-2 md:col-span-1",
               reportData.netProfit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
             )}>
               <p className={cn("text-sm font-bold uppercase mb-1", reportData.netProfit >= 0 ? "text-green-600" : "text-red-600")}>
@@ -1035,6 +1095,7 @@ export const FinancePage = () => {
                     <th className="px-6 py-4">Valor Pedido</th>
                     <th className="px-6 py-4">Insumos</th>
                     <th className="px-6 py-4">Entrega (18%)</th>
+                    <th className="px-6 py-4">💳 Taxa MP</th>
                     <th className="px-6 py-4 text-right">Lucro Real</th>
                   </tr>
                 </thead>
@@ -1062,6 +1123,9 @@ export const FinancePage = () => {
                       <td className="px-6 py-4 font-bold text-orange-500 text-sm">
                         -{formatCurrency(o.courierCost)}
                       </td>
+                      <td className="px-6 py-4 font-bold text-blue-500 text-sm">
+                        -{formatCurrency(o.mpFee || 0)}
+                      </td>
                       <td className="px-6 py-4 text-right">
                         <span className={cn(
                           "font-black text-lg",
@@ -1074,7 +1138,7 @@ export const FinancePage = () => {
                   ))}
                   {reportData.orders.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400 font-bold">
+                      <td colSpan={7} className="px-6 py-12 text-center text-gray-400 font-bold">
                         Nenhum pedido encontrado para esta data.
                       </td>
                     </tr>
