@@ -601,11 +601,10 @@ async function startServer() {
     // Get all companies with global and period metrics (Total Sales, Orders Today/Month, Expenses Today/Month, Clients)
     app.get("/api/saas/companies-with-metrics", superAdminGuard, async (req, res) => {
         try {
-            // Precise Local Date (Brazil)
+            // Simplified Date Handling (UTC/ISO focus) to avoid toLocaleString timezone errors
             const now = new Date();
-            const brNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
-            const startOfDay = new Date(brNow.getFullYear(), brNow.getMonth(), brNow.getDate()).toISOString();
-            const startOfMonth = new Date(brNow.getFullYear(), brNow.getMonth(), 1).toISOString();
+            const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
             // 1. Fetch all organizations
             const { data: orgs, error: orgError } = await supabaseAdmin
                 .from('organizations')
@@ -628,39 +627,43 @@ async function startServer() {
             console.log(`[METRICS-SCAN] Found: ${ordersRes.data?.length} orders, ${expensesRes.data?.length} expenses, ${profilesRes.data?.length} profiles`);
             // 3. Consolidate metrics per org
             const enrichedOrgs = orgs.map(org => {
-                const orgOrders = (ordersRes.data || []).filter(o => String(o.org_id) === String(org.id));
-                const orgExpenses = (expensesRes.data || []).filter(e => String(e.org_id) === String(org.id));
-                const orgProfiles = (profilesRes.data || []).filter(p => String(p.org_id) === String(org.id));
-                console.log(`[ORG-METRICS] ${org.slug}: ${orgOrders.length} orders found`);
-                // Calculate unique customers based on store specific profiles AND unique phones in orders
-                const orgProfilePhones = orgProfiles.map(p => p.phone?.replace(/\D/g, '')).filter(Boolean);
-                const orderPhonesSubset = orgOrders.map(o => o.customer_phone?.replace(/\D/g, '')).filter(Boolean);
-                // Also consider profiles without phones (identified by ID)
-                const profilesWithoutPhone = orgProfiles.filter(p => !p.phone).map(p => p.id);
-                const totalClients = new Set([...orgProfilePhones, ...orderPhonesSubset, ...profilesWithoutPhone]).size;
-                // Sales/Orders Metrics
-                const totalSales = orgOrders.reduce((sum, o) => sum + Number(o.total_price || 0), 0);
-                const todayOrders = orgOrders.filter(o => o.created_at >= startOfDay).length;
-                const monthOrders = orgOrders.filter(o => o.created_at >= startOfMonth).length;
-                // Expenses Metrics
-                const todayExpenses = orgExpenses
-                    .filter(e => e.created_at >= startOfDay)
-                    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-                const monthExpenses = orgExpenses
-                    .filter(e => e.created_at >= startOfMonth)
-                    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-                return {
-                    ...org,
-                    metrics: {
-                        totalSales,
-                        totalOrders: orgOrders.length,
-                        todayOrders,
-                        monthOrders,
-                        todayExpenses,
-                        monthExpenses,
-                        totalClients
-                    }
-                };
+                try {
+                    const orgOrders = (ordersRes.data || []).filter(o => String(o.org_id) === String(org.id));
+                    const orgExpenses = (expensesRes.data || []).filter(e => String(e.org_id) === String(org.id));
+                    const orgProfiles = (profilesRes.data || []).filter(p => String(p.org_id) === String(org.id));
+                    // Calculate unique customers
+                    const orgProfilePhones = orgProfiles.map(p => p.phone?.replace(/\D/g, '')).filter(Boolean);
+                    const orderPhonesSubset = orgOrders.map(o => o.customer_phone?.replace(/\D/g, '')).filter(Boolean);
+                    const profilesWithoutPhone = orgProfiles.filter(p => !p.phone).map(p => p.id);
+                    const totalClients = new Set([...orgProfilePhones, ...orderPhonesSubset, ...profilesWithoutPhone]).size;
+                    // Sales/Orders Metrics
+                    const totalSales = orgOrders.reduce((sum, o) => sum + Number(o.total_price || 0), 0);
+                    const todayOrders = orgOrders.filter(o => o.created_at && o.created_at >= startOfDay).length;
+                    const monthOrders = orgOrders.filter(o => o.created_at && o.created_at >= startOfMonth).length;
+                    // Expenses Metrics
+                    const todayExpenses = orgExpenses
+                        .filter(e => e.created_at && e.created_at >= startOfDay)
+                        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+                    const monthExpenses = orgExpenses
+                        .filter(e => e.created_at && e.created_at >= startOfMonth)
+                        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+                    return {
+                        ...org,
+                        metrics: {
+                            totalSales,
+                            totalOrders: orgOrders.length,
+                            todayOrders,
+                            monthOrders,
+                            todayExpenses,
+                            monthExpenses,
+                            totalClients
+                        }
+                    };
+                }
+                catch (orgErr) {
+                    console.error(`[ORG-METRICS-ERROR] Error on org ${org.slug}:`, orgErr);
+                    return { ...org, metrics: { totalSales: 0, totalOrders: 0, todayOrders: 0, monthOrders: 0, todayExpenses: 0, monthExpenses: 0, totalClients: 0 } };
+                }
             });
             res.json(enrichedOrgs);
         }
