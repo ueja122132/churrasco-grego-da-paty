@@ -301,7 +301,7 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
                >
                  <header className="flex justify-between items-center mb-8">
                     <div className="flex items-center gap-4">
-                      <button onClick={() => setFocusOrder(null)} className="p-4 bg-gray-100 rounded-2xl">
+                      <button onClick={() => setFocusOrder(null)} className="p-4 bg-gray-100 rounded-2xl" aria-label="Fechar detalhes">
                         <X size={32} />
                       </button>
                       <div>

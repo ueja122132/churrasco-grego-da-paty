@@ -2575,13 +2575,43 @@ async function startServer() {
   });
 
   app.get("/api/:orgId/extra-ingredients", async (req, res) => {
-    const cacheKey = `extras:${req.params.orgId}`;
-    const cached = getCachedData(cacheKey);
-    if (cached) return res.json(cached);
+    try {
+      const cacheKey = `extras:${req.params.orgId}`;
+      const cached = getCachedData(cacheKey);
+      if (cached) return res.json(cached);
 
-    const { data } = await supabase.from('extra_ingredients').select('*').eq('org_id', req.params.orgId);
-    setCachedData(cacheKey, data);
-    res.json(data);
+      const { data, error } = await supabase.from('extra_ingredients').select('*').eq('org_id', req.params.orgId);
+      if (error) throw error;
+      setCachedData(cacheKey, data);
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Inventory Items (Para cálculo de lucro no frontend)
+  app.get("/api/inventory-items", async (req, res) => {
+    try {
+      const orgId = req.query.org_id;
+      let query = supabase.from('inventory_items').select('*');
+      if (orgId) query = query.eq('org_id', orgId);
+      const { data, error } = await query;
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Product Ingredients (Recipes)
+  app.get("/api/product-ingredients", async (req, res) => {
+    try {
+      const { data, error } = await supabase.from('product_ingredients').select('*');
+      if (error) throw error;
+      res.json(data);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.post("/api/:orgId/extra-ingredients", billingGuard, checkSaaSLimits('products'), async (req, res) => {
@@ -2713,6 +2743,7 @@ async function startServer() {
           }
 
           io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+          io.emit("order:status_update", { ...order, status: 'pending', payment_status: 'paid' }); // Avisar a vitrine
           io.emit("order:new", { ...order, status: 'pending', payment_status: 'paid' });
         }, 350);
     } else if (payment_status) {
@@ -2747,6 +2778,7 @@ async function startServer() {
     // 4. Points & Post-update logic (Pontos agora são dados na criação do pedido)
     // 5. Emit updates
     io.emit("order:update", { id: parseInt(orderId), status, courier_id });
+    io.emit("order:status_update", updatedOrder); // Canal novo para a vitrine e rastreio
     if (status === 'delivered') io.emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
 
     res.json({ success: true, status: updatedOrder?.status });
@@ -2952,83 +2984,122 @@ Diretrizes:
     res.json({ success: true });
   });
 
+  // Helper function to calculate order CMV and Profit for Commission
+  const calculateOrderProfitAndCommission = (order: any, inventory: any[], recipes: any[], rate: number) => {
+    let totalCost = 0;
+    const items = Array.isArray(order.items) ? order.items : [];
+
+    items.forEach((item: any) => {
+      // Find the recipe for this product
+      // Ensure we compare strings or numbers correctly
+      const itemId = Number(item.id || item.product_id);
+      const productRecipe = recipes.filter(r => Number(r.product_id) === itemId);
+      
+      let itemCost = 0;
+      productRecipe.forEach(recipeIng => {
+        const invItem = inventory.find(i => i.id === recipeIng.inventory_item_id);
+        if (invItem) {
+          const cost = (Number(invItem.current_avg_cost) || 0) * (Number(recipeIng.quantity) || 0);
+          itemCost += cost;
+        }
+      });
+      totalCost += itemCost * (Number(item.quantity) || 1);
+    });
+
+    const revenue = Number(order.total_price) || 0;
+    const profit = Math.max(0, revenue - totalCost);
+    const commission = profit * (rate / 100);
+    
+    // Debug Log (Optional: remove in production)
+    // console.log(`[COMMISSION CALC] Order #${order.id}: Rev ${revenue}, Cost ${totalCost.toFixed(2)}, Profit ${profit.toFixed(2)}, Comm ${commission.toFixed(2)}`);
+    
+    return commission;
+  };
+
   app.get("/api/courier/:id/stats", async (req, res) => {
-    // Apenas comissões não pagas
-    const { data: unpaidOrders, error: unpaidError } = await supabase
-      .from('orders')
-      .select('delivery_fee')
-      .eq('courier_id', req.params.id)
-      .eq('status', 'delivered')
-      .eq('commission_paid', false);
+    const courierId = req.params.id;
 
-    if (unpaidError) return res.status(500).json({ error: unpaidError.message });
+    try {
+      // Get courier rate
+      const { data: courier } = await supabase.from('profiles').select('commission_rate, org_id').eq('id', courierId).single();
+      const rate = courier?.commission_rate || 18;
+      const orgId = courier?.org_id;
 
-    // Vales não compensados (settled = false)
-    const { data: advances, error: advancesError } = await supabase
-      .from('expenses')
-      .select('amount')
-      .eq('courier_id', req.params.id)
-      .eq('settled', false);
+      // Get all necessary data for profit calculation
+      const [unpaidOrdersRes, advancesRes, allDeliveredRes, inventoryRes, recipesRes] = await Promise.all([
+        supabase.from('orders').select('total_price, items, delivery_fee').eq('courier_id', courierId).eq('status', 'delivered').eq('commission_paid', false),
+        supabase.from('expenses').select('amount').eq('courier_id', courierId).eq('settled', false),
+        supabase.from('orders').select('created_at, shipped_at, delivered_at').eq('courier_id', courierId).eq('status', 'delivered'),
+        supabase.from('inventory_items').select('id, current_avg_cost').eq('org_id', orgId),
+        supabase.from('product_ingredients').select('product_id, inventory_item_id, quantity')
+      ]);
 
-    if (advancesError) return res.status(500).json({ error: advancesError.message });
+      if (unpaidOrdersRes.error) throw unpaidOrdersRes.error;
 
-    // Todos os pedidos entregues para estatísticas (tempo médio e contagem mensal/geral)
-    const { data: allDeliveredOrders, error: allOrdersError } = await supabase
-      .from('orders')
-      .select('created_at, shipped_at, delivered_at')
-      .eq('courier_id', req.params.id)
-      .eq('status', 'delivered');
+      const unpaidOrders = unpaidOrdersRes.data || [];
+      const inventory = inventoryRes.data || [];
+      const recipes = recipesRes.data || [];
 
-    if (allOrdersError) return res.status(500).json({ error: allOrdersError.message });
+      // Calculate commissions based on Profit
+      const totalCommissions = unpaidOrders.reduce((sum, o) => {
+        return sum + calculateOrderProfitAndCommission(o, inventory, recipes, rate);
+      }, 0);
 
-    const totalCommissions = unpaidOrders.reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
-    const totalAdvances = advances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      const totalAdvances = (advancesRes.data || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+      const allDeliveredOrders = allDeliveredRes.data || [];
 
-    // Cálculos de métricas de performance
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+      // Cálculos de métricas de performance
+      const now = new Date();
+      const currentMonth = now.getMonth();
+      const currentYear = now.getFullYear();
 
-    let totalLifetimeDeliveries = 0;
-    let monthlyDeliveries = 0;
-    let totalDeliveryTimeMins = 0;
-    let timedDeliveriesCount = 0;
+      let totalLifetimeDeliveries = 0;
+      let monthlyDeliveries = 0;
+      let totalDeliveryTimeMins = 0;
+      let timedDeliveriesCount = 0;
 
-    for (const order of (allDeliveredOrders || [])) {
-      totalLifetimeDeliveries++;
-      const orderDate = order.created_at ? new Date(order.created_at) : null;
-      const isThisMonth = orderDate && orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear;
-      if (isThisMonth) monthlyDeliveries++;
+      for (const order of allDeliveredOrders) {
+        totalLifetimeDeliveries++;
+        const orderDate = order.created_at ? new Date(order.created_at) : null;
+        if (orderDate && orderDate.getMonth() === currentMonth && orderDate.getFullYear() === currentYear) monthlyDeliveries++;
 
-      if (order.shipped_at && order.delivered_at) {
-        const shipped = new Date(order.shipped_at).getTime();
-        const delivered = new Date(order.delivered_at).getTime();
-        const minutes = (delivered - shipped) / (1000 * 60);
-        if (minutes >= 0) {
-          totalDeliveryTimeMins += minutes;
-          timedDeliveriesCount++;
+        if (order.shipped_at && order.delivered_at) {
+          const mins = (new Date(order.delivered_at).getTime() - new Date(order.shipped_at).getTime()) / 60000;
+          if (mins >= 0) {
+            totalDeliveryTimeMins += mins;
+            timedDeliveriesCount++;
+          }
         }
       }
-    }
 
-    res.json({
-      total_commissions: totalCommissions,
-      total_advances: totalAdvances,
-      net_pay: totalCommissions - totalAdvances,
-      total_lifetime_deliveries: totalLifetimeDeliveries,
-      monthly_deliveries: monthlyDeliveries,
-      avg_lifetime_time_mins: timedDeliveriesCount > 0 ? Math.round(totalDeliveryTimeMins / timedDeliveriesCount) : 0,
-      total_deliveries: totalLifetimeDeliveries
-    });
+      res.json({
+        total_commissions: totalCommissions,
+        total_advances: totalAdvances,
+        net_pay: totalCommissions - totalAdvances,
+        total_lifetime_deliveries: totalLifetimeDeliveries,
+        monthly_deliveries: monthlyDeliveries,
+        avg_lifetime_time_mins: timedDeliveriesCount > 0 ? Math.round(totalDeliveryTimeMins / timedDeliveriesCount) : 0,
+        total_deliveries: totalLifetimeDeliveries
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/:orgId/courier-stats", async (req, res) => {
+    let orgId = req.params.orgId;
     try {
+      // Resolve slug to UUID if needed
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orgId)) {
+        const { data: orgData } = await supabase.from('organizations').select('id').eq('slug', orgId).single();
+        if (orgData) orgId = orgData.id;
+      }
+
       // 1. Get all couriers for this org
       const { data: couriers } = await supabase
         .from('profiles')
-        .select('id')
-        .eq('org_id', req.params.orgId)
+        .select('id, commission_rate')
+        .eq('org_id', orgId)
         .eq('role', 'courier');
 
       if (!couriers || couriers.length === 0) return res.json({});
@@ -3038,7 +3109,7 @@ Diretrizes:
       // 2. Get delivered orders for these couriers
       const { data: orders } = await supabase
         .from('orders')
-        .select('courier_id, delivery_fee, status, commission_paid, created_at, shipped_at, delivered_at')
+        .select('courier_id, total_price, items, status, commission_paid, created_at, shipped_at, delivered_at')
         .in('courier_id', courierIds)
         .eq('status', 'delivered');
 
@@ -3049,16 +3120,31 @@ Diretrizes:
         .in('courier_id', courierIds)
         .eq('settled', false);
 
+      // Fetch helper data
+      const [inventoryRes, recipesRes] = await Promise.all([
+        supabase.from('inventory_items').select('id, current_avg_cost').eq('org_id', orgId),
+        supabase.from('product_ingredients').select('product_id, inventory_item_id, quantity')
+      ]);
+
+      const inventory = inventoryRes.data || [];
+      const recipes = recipesRes.data || [];
+
       const stats: any = {};
       const now = new Date();
       const currentMonth = now.getMonth();
       const currentYear = now.getFullYear();
 
-      courierIds.forEach(id => {
+      couriers.forEach(courier => {
+        const id = courier.id;
+        const rate = courier.commission_rate || 18;
         const courierOrders = (orders || []).filter(o => o.courier_id === id);
         const courierExpenses = (expenses || []).filter(e => e.courier_id === id);
 
-        const unpaidCommissions = courierOrders.filter(o => !o.commission_paid).reduce((sum, o) => sum + (Number(o.delivery_fee) || 0), 0);
+        // Calculate commissions based on Profit
+        const unpaidCommissions = courierOrders
+          .filter(o => !o.commission_paid)
+          .reduce((sum, o) => sum + calculateOrderProfitAndCommission(o, inventory, recipes, rate), 0);
+
         const totalAdvances = courierExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
         
         let totalLifetimeDeliveries = 0;
@@ -3091,6 +3177,7 @@ Diretrizes:
         };
       });
 
+      apiCache.clear(); // Clear cache to ensure fresh stats
       res.json(stats);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3235,6 +3322,34 @@ Diretrizes:
     const loc = (global as any).courierLocations?.[req.params.courierId];
     if (!loc) return res.status(404).json({ error: 'Entregador sem localização ativa' });
     res.json(loc);
+  });
+
+  // Post-delivery evaluation (Stars + Comment)
+  app.patch("/api/orders/:id/feedback", async (req, res) => {
+    try {
+      const { rating, feedback_comment } = req.body;
+      
+      if (!rating || rating < 1 || rating > 5) {
+        return res.status(400).json({ error: "Nota inválida (1-5 estrelas)." });
+      }
+
+      const { data, error } = await supabaseAdmin
+        .from('orders')
+        .update({ 
+          rating, 
+          feedback_comment 
+        })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ error: error.message });
+      
+      console.log(`[FEEDBACK] Pedido #${req.params.id} avaliado com ${rating} estrelas.`);
+      res.json({ success: true, order: data });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   httpServer.listen(Number(PORT), "0.0.0.0", () => {

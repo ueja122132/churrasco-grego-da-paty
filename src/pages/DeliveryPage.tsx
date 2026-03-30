@@ -25,6 +25,8 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
   const [showDispatchModal, setShowDispatchModal] = useState<Order | null>(null);
   const [selectedCourierId, setSelectedCourierId] = useState("");
   const [deliveryFee, setDeliveryFee] = useState("0");
+  const [inventory, setInventory] = useState<any[]>([]);
+  const [recipes, setRecipes] = useState<any[]>([]);
 
 
 
@@ -32,13 +34,32 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
     if (showDispatchModal && selectedCourierId) {
       const selectedCourier = couriers.find(c => String(c.id) === String(selectedCourierId));
       if (selectedCourier && selectedCourier.commission_rate) {
-        const fee = (showDispatchModal.total_price * (selectedCourier.commission_rate / 100)).toFixed(2);
-        setDeliveryFee(fee);
+        const rate = selectedCourier.commission_rate;
+        
+        // Calculate CMV for this order
+        let totalCost = 0;
+        showDispatchModal.items.forEach(item => {
+          const itemId = Number(item.id || (item as any).product_id);
+          const productRecipe = recipes.filter(r => Number(r.product_id) === itemId);
+          
+          let itemCost = 0;
+          productRecipe.forEach(recipeIng => {
+            const invItem = inventory.find(i => i.id === recipeIng.inventory_item_id);
+            if (invItem) {
+              itemCost += (Number(invItem.current_avg_cost) || 0) * (Number(recipeIng.quantity) || 0);
+            }
+          });
+          totalCost += itemCost * (item.quantity || 1);
+        });
+
+        const profit = Math.max(0, showDispatchModal.total_price - totalCost);
+        const suggestedFee = (profit * (rate / 100)).toFixed(2);
+        setDeliveryFee(suggestedFee);
       } else {
         setDeliveryFee("0");
       }
     }
-  }, [selectedCourierId, showDispatchModal, couriers]);
+  }, [selectedCourierId, showDispatchModal, couriers, inventory, recipes]);
 
   const updateStatus = async (id: number, status: string) => {
     try {
@@ -68,6 +89,8 @@ export const DeliveryPage: React.FC<{ notify: any }> = ({ notify }) => {
     if (!org) return;
     fetch(`/api/${org.id}/orders`).then(res => res.json()).then(setOrders);
     fetch(`/api/${org.id}/couriers`).then(res => res.json()).then(setCouriers);
+    fetch(`/api/inventory-items?org_id=${org.id}`).then(res => res.json()).then(setInventory);
+    fetch(`/api/product-ingredients`).then(res => res.json()).then(setRecipes);
 
     socket.on("order:update", ({ id, status }: { id: number, status: string }) => {
       setOrders(prev => prev.map(o => o.id === id ? { ...o, status: status as any } : o));

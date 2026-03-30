@@ -24,7 +24,8 @@ import {
   Check,
   RefreshCw,
   ShieldCheck,
-  AlertCircle
+  AlertCircle,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from '../lib/utils';
@@ -47,6 +48,7 @@ const ADMIN_TABS = [
   { id: 'finance', label: 'Financeiro', icon: DollarSign },
   { id: 'couriers', label: 'Entregadores', icon: Bike },
   { id: 'clients', label: 'Clientes', icon: UsersIcon },
+  { id: 'feedbacks', label: 'Avaliações', icon: MessageSquare },
   { id: 'faturamento', label: 'Faturamento', icon: Star },
   { id: 'settings', label: 'Configurações', icon: Settings },
 ];
@@ -113,6 +115,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const [changingPlan, setChangingPlan] = useState(false);
   const [generatingSaasPix, setGeneratingSaasPix] = useState(false);
   const [saasPixData, setSaasPixData] = useState<any>(null);
+  // Feedback states
+  const [feedbacks, setFeedbacks] = useState<any[]>([]);
 
   useEffect(() => {
     fetch('/api/saas/plans')
@@ -185,6 +189,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
       } else if (activeTab === 'settings') {
         const res = await fetch(`/api/${currentOrg.id}/products`);
         if (res.ok) setProducts(await res.json());
+      } else if (activeTab === 'feedbacks') {
+        const res = await fetch(`/api/${currentOrg.id}/orders`);
+        if (res.ok) {
+          const allOrders = await res.json();
+          setFeedbacks(allOrders.filter((o: any) => o.rating !== null));
+        }
       }
     } catch (err) {
       console.error("[ADMIN DEBUG] Fatal error in fetchData:", err);
@@ -913,6 +923,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
           
           <div className="lg:col-span-2">
             <div className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden">
+               <div className="bg-blue-50 p-4 border-b border-blue-100 flex items-center gap-3">
+                 <AlertCircle className="text-blue-600" size={20} />
+                 <p className="text-xs font-medium text-blue-800">
+                   <strong>Nova Regra de Transparência:</strong> As comissões são calculadas automaticamente como <strong>18% do lucro real</strong> (Venda - Custo dos Ingredientes) de cada pedido entregue.
+                 </p>
+               </div>
                <div className="overflow-x-auto">
                  <table className="w-full text-left">
                    <thead className="bg-gray-50 border-b border-gray-100">
@@ -1004,6 +1020,59 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+      
+      {activeTab === 'feedbacks' && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-black text-gray-800 uppercase italic tracking-tighter">O que os clientes estão achando? 🍢💬</h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {feedbacks.length === 0 ? (
+              <div className="col-span-full py-20 text-center bg-white rounded-[2.5rem] border-2 border-dashed border-gray-100">
+                <MessageSquare size={48} className="mx-auto mb-4 text-gray-200" />
+                <p className="text-gray-400 font-medium">Ninguém comentou nada ainda. Vamos caprichar no churrasco! 🍖</p>
+              </div>
+            ) : (
+              feedbacks.map((f) => (
+                <div key={f.id} className="bg-white p-6 rounded-[2rem] border-2 border-gray-50 shadow-sm relative overflow-hidden group hover:border-orange-200 transition-all">
+                  <div className="absolute top-0 right-0 p-4">
+                    <div className="bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-[10px] font-black uppercase">
+                      #{f.id}
+                    </div>
+                  </div>
+                  
+                  <div className="flex gap-1 mb-4">
+                    {[1,2,3,4,5].map(star => (
+                      <Star 
+                        key={star} 
+                        size={14} 
+                        fill={star <= f.rating ? "currentColor" : "none"}
+                        className={star <= f.rating ? "text-orange-500" : "text-gray-200"} 
+                      />
+                    ))}
+                  </div>
+                  
+                  <p className="text-gray-700 font-bold mb-4 italic leading-relaxed">
+                    "{f.feedback_comment || "O cliente não deixou um comentário, mas deu uma nota!"}"
+                  </p>
+                  
+                  <div className="pt-4 border-t border-gray-50 flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-black text-gray-900 leading-none">{f.customer_name || "Cliente Satisfeito"}</p>
+                      <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-widest italic">{new Date(f.created_at).toLocaleDateString('pt-BR')}</p>
+                    </div>
+                    <div className="text-right">
+                       <p className="text-[9px] text-gray-400 uppercase font-bold">Valor</p>
+                       <p className="text-xs font-black text-emerald-600 leading-none">R$ {f.total_price.toFixed(2)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

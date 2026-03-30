@@ -56,6 +56,8 @@ export interface Order {
   latitude?: number;
   longitude?: number;
   org_id?: string;
+  rating?: number;
+  feedback_comment?: string;
 }
 
 export interface Organization {

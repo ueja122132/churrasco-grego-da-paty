@@ -88,6 +88,14 @@ export const SalesPage = () => {
   );
   const [showLocationExplainer, setShowLocationExplainer] = useState(false);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
+  
+  // Tracking & Feedback States
+  const [activeOrders, setActiveOrders] = useState<Order[]>([]);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [activeFeedbackOrder, setActiveFeedbackOrder] = useState<Order | null>(null);
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
 
   const getStoreStatusMessage = () => {
     if (!org?.operating_hours) return "Loja Aberta";
@@ -173,7 +181,60 @@ export const SalesPage = () => {
       .then(res => res.json())
       .then(setAvailableExtras)
       .catch(err => console.error("Erro ao carregar ingredientes extras:", err));
-  }, [org]);
+
+    // Restore ALL active orders for tracking
+    const lastId = localStorage.getItem('last_order_id');
+    
+    // First, try to restore the last one (fast)
+    if (lastId) {
+      fetch(`/api/orders/${lastId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && !['delivered', 'cancelled'].includes(data.status)) {
+            setActiveOrders(prev => {
+              if (prev.some(o => o.id === data.id)) return prev;
+              return [...prev, data];
+            });
+          } else if (data && data.status === 'delivered' && !data.rating) {
+            setActiveFeedbackOrder(data);
+            setShowFeedbackModal(true);
+          }
+        })
+        .catch(err => console.error("Erro ao restaurar último pedido:", err));
+    }
+
+    // Then, fetch ALL active orders for this org/user to be sure
+    if (org?.id) {
+      const url = user?.id 
+        ? `/api/orders?organization_id=${org.id}&user_id=${user.id}&status=pending,preparing,ready,shipped`
+        : `/api/orders?organization_id=${org.id}&guest_phone=${guestPhone}&status=pending,preparing,ready,shipped`;
+      
+      // We only do this if we have a way to identify the user/guest
+      const storedPhone = localStorage.getItem('guest_phone');
+      if (user?.id || storedPhone) {
+        const finalUrl = user?.id 
+          ? `/api/orders?organization_id=${org.id}&user_id=${user.id}`
+          : `/api/orders?organization_id=${org.id}&guest_phone=${storedPhone}`;
+          
+        fetch(finalUrl)
+          .then(res => res.json())
+          .then(data => {
+            if (Array.isArray(data)) {
+              const activeOnes = data.filter(o => !['delivered', 'cancelled'].includes(o.status) || (o.status === 'delivered' && !o.rating));
+              setActiveOrders(activeOnes.filter(o => !['delivered', 'cancelled'].includes(o.status)));
+              
+              // Handle pending feedback
+              const needsFeedback = activeOnes.find(o => o.status === 'delivered' && !o.rating);
+              if (needsFeedback) {
+                setActiveFeedbackOrder(needsFeedback);
+                setShowFeedbackModal(true);
+              }
+            }
+          })
+          .catch(err => console.error("Erro ao sincronizar pedidos ativos:", err));
+      }
+    }
+  }, [org, user, guestPhone]);
 
   // Removing points listener as per "no more registration"
 
@@ -189,18 +250,39 @@ export const SalesPage = () => {
       console.log(`[SalesPage] Received global signal for Order ${id}, status: ${payment_status}. Currently waiting for: ${currentWaiting?.id}`);
 
       if (currentWaiting && Number(currentWaiting.id) === Number(id) && payment_status === 'paid') {
-        console.log("[SalesPage] Match confirmed! Auto-closing modal...");
         setShowPayment(false);
         setPixData(null);
         setLastOrder(null);
         setCart([]); // Clear cart ONLY here for Pix
-        notify("Pagamento confirmado, volte sempre!", "success");
+        setActiveOrders(prev => {
+          if (prev.some(o => o.id === currentWaiting.id)) {
+            return prev.map(o => o.id === currentWaiting.id ? { ...currentWaiting, payment_status: 'paid' as any } : o);
+          }
+          return [...prev, { ...currentWaiting, payment_status: 'paid' as any }];
+        });
+        notify("Pagamento confirmado, seu pedido já está no fogo! 🔥", "success");
+      }
+    };
+
+    const onStatusUpdate = (updatedOrder: Order) => {
+      console.log("[SalesPage] Status update received for Order", updatedOrder.id, " New Status:", updatedOrder.status);
+      
+      setActiveOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+
+      if (updatedOrder.status === 'delivered') {
+        const lastId = localStorage.getItem('last_order_id');
+        if (lastId && Number(updatedOrder.id) === Number(lastId)) {
+          setActiveFeedbackOrder(updatedOrder);
+          setShowFeedbackModal(true);
+        }
       }
     };
 
     socket.on("order:payment_update", onPaymentUpdate);
+    socket.on("order:status_update", onStatusUpdate);
     return () => {
       socket.off("order:payment_update", onPaymentUpdate);
+      socket.off("order:status_update", onStatusUpdate);
     };
   }, []); // Mount only! Uses ref for closure-safe state access
 
@@ -359,18 +441,19 @@ export const SalesPage = () => {
       const data = await res.json();
       console.log("[SalesPage] Order created successfully:", data);
       
-      // Salvar dados do visitante para a próxima vez
       localStorage.setItem('guest_name', guestName);
       localStorage.setItem('guest_phone', guestPhone);
       localStorage.setItem('guest_location', JSON.stringify(guestLocation));
+      localStorage.setItem('last_order_id', data.id.toString());
 
       setLastOrder(data);
+      setActiveOrders(prev => [...prev, data]);
       setUseReward(false);
+      setCart([]); // Esvaziar o carrinho IMEDIATAMENTE após criar o pedido com sucesso
 
       if (paymentMethod === 'delivery') {
         setIsOrdering(false);
-        setCart([]); 
-        notify("Pedido realizado com sucesso! O pagamento será feito na entrega.", "success");
+        notify("Pedido realizado com sucesso! Acompanhe o status aqui na tela.", "success");
         return;
       }
 
@@ -469,6 +552,33 @@ export const SalesPage = () => {
       notify("Pagamento confirmado! Seu pedido já está na cozinha. 🍢", "success");
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const submitFeedback = async () => {
+    if (!activeFeedbackOrder) return;
+    setIsSubmittingFeedback(true);
+    try {
+      const res = await fetch(`/api/orders/${activeFeedbackOrder.id}/feedback`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          rating: feedbackRating, 
+          feedback_comment: feedbackComment 
+        })
+      });
+      if (res.ok) {
+        notify("Obrigado pelo seu feedback! Isso nos ajuda a crescer. 🍢❤️", "success");
+        setShowFeedbackModal(false);
+        setActiveOrders(prev => prev.filter(o => o.id !== activeFeedbackOrder.id));
+        setActiveFeedbackOrder(null);
+        localStorage.removeItem('last_order_id');
+      }
+    } catch (err) {
+      console.error(err);
+      notify("Erro ao enviar feedback.", "error");
+    } finally {
+      setIsSubmittingFeedback(false);
     }
   };
 
@@ -890,6 +1000,66 @@ export const SalesPage = () => {
               )}
               {!isOrdering && isShopOpen && <ArrowRight size={20} className="text-orange-500 group-hover:translate-x-1 transition-transform" />}
             </button>
+            
+            {/* TRACKING SIDEBAR SECTION - MOVED INSIDE STICKY */}
+            <AnimatePresence>
+              {activeOrders.length > 0 && activeOrders.map((order) => (
+                <motion.div
+                  key={order.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="mt-6 pt-6 border-t border-gray-100 space-y-4"
+                >
+                  <div className="bg-orange-50/50 border-2 border-orange-100 shadow-sm rounded-3xl p-5 overflow-hidden relative">
+                    <div className={cn(
+                      "absolute top-0 left-0 h-1 bg-orange-500 transition-all duration-1000",
+                      order.status === 'pending' ? 'w-[20%]' : 
+                      order.status === 'preparing' ? 'w-[50%]' :
+                      order.status === 'ready' ? 'w-[80%]' : 'w-full'
+                    )} />
+                    
+                    <div className="flex items-center gap-4">
+                      <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
+                        {order.status === 'pending' && <Clock className="text-orange-600" size={20} />}
+                        {order.status === 'preparing' && <UtensilsCrossed className="text-orange-600" size={20} />}
+                        {order.status === 'ready' && <ShoppingBag className="text-orange-600" size={20} />}
+                        {order.status === 'shipped' && <Truck className="text-orange-600" size={20} />}
+                        {order.status === 'delivered' && <CheckCircle2 className="text-green-600" size={20} />}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[9px] font-black uppercase text-gray-400 tracking-widest mb-0.5">Pedido #{order.id}</p>
+                        <h4 className="text-xs font-black text-gray-900 uppercase italic tracking-tighter leading-none">
+                          {order.status === 'pending' && "Aguardando..."}
+                          {order.status === 'preparing' && "No Fogo! 🔥"}
+                          {order.status === 'ready' && "Pronto! 🍢"}
+                          {order.status === 'shipped' && "Saindo... 🛵"}
+                          {order.status === 'delivered' && "Entregue! ✨"}
+                          {order.status === 'cancelled' && "Cancelado ❌"}
+                        </h4>
+                        <p className="text-[10px] text-gray-500 font-medium mt-1 truncate">
+                          {order.items.map(i => `${i.quantity}x ${i.name}`).join(', ')}
+                        </p>
+                      </div>
+
+                      {order.status === 'delivered' && (
+                        <button 
+                          onClick={() => {
+                            setActiveFeedbackOrder(order);
+                            setShowFeedbackModal(true);
+                          }}
+                          className="bg-orange-600 text-white p-2 rounded-xl shadow-lg shadow-orange-200"
+                          aria-label="Avaliar pedido"
+                        >
+                          <Star size={16} fill="currentColor" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </AnimatePresence>
           </div>
         </div>
       </div>
@@ -1083,6 +1253,77 @@ export const SalesPage = () => {
                   className="w-full py-3 text-sm font-medium text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   Fechar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* FEEDBACK MODAL */}
+      <AnimatePresence>
+        {showFeedbackModal && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white w-full max-w-md rounded-[3rem] overflow-hidden shadow-2xl p-8 text-center"
+            >
+              <div className="w-24 h-24 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                 <Trophy className="text-orange-600" size={48} />
+              </div>
+              
+              <h2 className="text-3xl font-black text-gray-900 tracking-tighter uppercase italic leading-tight mb-2">
+                O Churrasco estava <span className="text-orange-600 underline">Top</span>?
+              </h2>
+              <p className="text-gray-500 font-medium mb-8">Sua opinião ajuda a PATY a melhorar cada vez mais!</p>
+
+              <div className="flex justify-center gap-2 mb-8">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setFeedbackRating(star)}
+                    className="transition-all hover:scale-125"
+                    aria-label={`${star} estrelas`}
+                  >
+                    <Star 
+                      size={40} 
+                      className={star <= feedbackRating ? "text-orange-500" : "text-gray-200"}
+                      fill={star <= feedbackRating ? "currentColor" : "none"}
+                    />
+                  </button>
+                ))}
+              </div>
+
+              <textarea 
+                placeholder="Conte o que achou... (opcional)"
+                value={feedbackComment}
+                onChange={(e) => setFeedbackComment(e.target.value)}
+                className="w-full p-4 rounded-3xl bg-gray-50 border-2 border-gray-100 focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all outline-none resize-none mb-6 font-medium text-sm"
+                rows={3}
+              />
+
+              <div className="flex gap-4">
+                <button
+                  onClick={() => { 
+                    setShowFeedbackModal(false); 
+                    if (activeFeedbackOrder) {
+                      setActiveOrders(prev => prev.filter(o => o.id !== activeFeedbackOrder.id));
+                    }
+                    setActiveFeedbackOrder(null); 
+                    localStorage.removeItem('last_order_id'); 
+                  }}
+                  className="flex-1 py-4 font-bold text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  Agora Não
+                </button>
+                <button
+                  onClick={submitFeedback}
+                  disabled={isSubmittingFeedback}
+                  className="flex-[2] bg-orange-600 text-white py-4 rounded-2xl font-bold hover:bg-orange-700 shadow-xl shadow-orange-200 transition-all flex items-center justify-center gap-2"
+                >
+                  {isSubmittingFeedback ? "Enviando..." : "Enviar Avaliação"}
                 </button>
               </div>
             </motion.div>

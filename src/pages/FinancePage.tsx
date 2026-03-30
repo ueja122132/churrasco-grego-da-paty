@@ -30,7 +30,8 @@ export const FinancePage = () => {
   const location = useLocation();
   const isNested = location.pathname === '/admin';
   
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'simulator' | 'recipe'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'simulator' | 'recipe' | 'reports'>('dashboard');
+  const [selectedReportDate, setSelectedReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<(Product & { ingredients: ProductIngredient[] })[]>([]);
@@ -57,7 +58,7 @@ export const FinancePage = () => {
   const [newMaterial, setNewMaterial] = useState({
     name: "",
     unit: "Kg",
-    category: "Proteína",
+    category: "Carne",
     initial_cost: ""
   });
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
@@ -261,6 +262,19 @@ export const FinancePage = () => {
     return costs;
   }, [products, inventory]);
 
+  const groupedIngredients = useMemo(() => {
+    const selectedProduct = products.find(p => p.id === selectedProductId);
+    if (!selectedProduct) return {};
+    
+    const groups: Record<string, ProductIngredient[]> = {};
+    selectedProduct.ingredients.forEach(ing => {
+      const cat = (ing as any).inventory_item?.category || 'Insumo';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(ing);
+    });
+    return groups;
+  }, [products, selectedProductId]);
+
 
   // Filtered Data for Dashboard
   const filteredOrders = useMemo(() => {
@@ -298,6 +312,15 @@ export const FinancePage = () => {
       return acc + (o.items.reduce((sc, item) => sc + (productCosts[item.id] || 0), 0));
     }, 0);
     
+    const courierCosts = filteredOrders.reduce((acc, o) => {
+      if (o.courier_id) {
+        const orderCmv = o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0);
+        const orderGrossProfit = Math.max(0, o.total_price - orderCmv);
+        return acc + (orderGrossProfit * 0.18);
+      }
+      return acc;
+    }, 0);
+
     const expTotal = filteredExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
     const avulsasTotal = filteredExpenses
       .filter(e => e.category === 'Avulsa')
@@ -308,11 +331,51 @@ export const FinancePage = () => {
       count,
       ticket,
       cmv,
+      courierCosts,
       expenses: expTotal,
       avulsas: avulsasTotal,
-      netProfit: revenue - cmv - expTotal
+      netProfit: revenue - cmv - expTotal - courierCosts
     };
   }, [filteredOrders, filteredExpenses, productCosts]);
+
+  // Daily Report Data
+  const reportData = useMemo(() => {
+    const dayOrders = orders.filter(o => o.created_at.startsWith(selectedReportDate));
+    const dayExpenses = expenses.filter(e => (e.date || e.created_at).startsWith(selectedReportDate));
+
+    const revenue = dayOrders.reduce((acc, o) => acc + o.total_price, 0);
+    const cmv = dayOrders.reduce((acc, o) => {
+      return acc + (o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0));
+    }, 0);
+    const courierCosts = dayOrders.reduce((acc, o) => {
+      if (o.courier_id) {
+        const orderCmv = o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0);
+        const orderGrossProfit = Math.max(0, o.total_price - orderCmv);
+        return acc + (orderGrossProfit * 0.18);
+      }
+      return acc;
+    }, 0);
+    const expTotal = dayExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
+
+    return {
+      revenue,
+      cmv,
+      courierCosts,
+      expenses: expTotal,
+      netProfit: revenue - cmv - courierCosts - expTotal,
+      orders: dayOrders.map(o => {
+        const orderCmv = o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0);
+        const orderGrossProfit = Math.max(0, o.total_price - orderCmv);
+        const orderCourier = o.courier_id ? (orderGrossProfit * 0.18) : 0;
+        return {
+          ...o,
+          cmv: orderCmv,
+          courierCost: orderCourier,
+          profit: orderGrossProfit - orderCourier
+        };
+      })
+    };
+  }, [orders, expenses, selectedReportDate, productCosts]);
 
   // Quick Fix for CMV scaling bug (Molho/Pão)
   const handleRepairData = async () => {
@@ -431,6 +494,12 @@ export const FinancePage = () => {
           className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'simulator' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
         >
           <Calculator size={18} /> Simulador
+        </button>
+        <button 
+          onClick={() => setActiveTab('reports')}
+          className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'reports' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
+        >
+          <Activity size={18} /> Relatório Diário
         </button>
       </div>
 
@@ -634,7 +703,7 @@ export const FinancePage = () => {
                               setNewMaterial({
                                 name: item.name,
                                 unit: item.unit,
-                                category: (item as any).category || "Proteína",
+                                category: (item as any).category || "Carne",
                                 initial_cost: String(item.current_avg_cost || "")
                               });
                               setIsAddingNewMaterial(true);
@@ -725,42 +794,61 @@ export const FinancePage = () => {
                       </button>
                     </div>
 
-                    <div className="space-y-3">
-                      {products.find(p => p.id === selectedProductId)?.ingredients.map(ing => (
-                        <div key={ing.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-orange-600 font-black border border-gray-200">
-                               <Package size={20} />
-                            </div>
-                            <div>
-                               <p className="font-bold text-gray-800">{(ing as any).inventory_item?.name || 'Item'}</p>
-                               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Custo: {formatCurrency(Number((ing as any).inventory_item?.current_avg_cost || 0))} / {(ing as any).inventory_item?.unit}</p>
+                    <div className="space-y-6">
+                      {(() => {
+                        const categoryOrder = ['Carne', 'Queijo', 'Hortifruti', 'Insumo', 'Embalagem'];
+                        const availableCategories = Object.keys(groupedIngredients).sort((a, b) => {
+                          const indexA = categoryOrder.indexOf(a);
+                          const indexB = categoryOrder.indexOf(b);
+                          if (indexA === -1 && indexB === -1) return a.localeCompare(b);
+                          if (indexA === -1) return 1;
+                          if (indexB === -1) return -1;
+                          return indexA - indexB;
+                        });
+
+                        return availableCategories.map(cat => (
+                          <div key={cat} className="space-y-3">
+                            <h4 className="text-[10px] font-black uppercase text-gray-400 tracking-[0.2em] mb-1 ml-1">{cat}</h4>
+                            <div className="space-y-2">
+                              {groupedIngredients[cat].map(ing => (
+                                <div key={ing.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                  <div className="flex items-center gap-4">
+                                    <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-orange-600 font-black border border-gray-200">
+                                       <Package size={20} />
+                                    </div>
+                                    <div>
+                                       <p className="font-bold text-gray-800">{(ing as any).inventory_item?.name || 'Item'}</p>
+                                       <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Custo: {formatCurrency(Number((ing as any).inventory_item?.current_avg_cost || 0))} / {(ing as any).inventory_item?.unit}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-4">
+                                     <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-gray-200">
+                                       <input 
+                                         type="number"
+                                         step="0.001"
+                                         value={editingIngValues[ing.id] ?? ing.quantity}
+                                         aria-label={`Quantidade de ${(ing as any).inventory_item?.name}`}
+                                         title="Ajustar quantidade na ficha técnica"
+                                         onChange={(e) => handleUpdateIngredient(ing.id, e.target.value)}
+                                         className="w-16 font-black text-gray-900 outline-none bg-transparent text-center"
+                                       />
+                                       <span className="text-xs font-bold text-gray-400">{(ing as any).inventory_item?.unit}</span>
+                                     </div>
+                                     <button 
+                                      onClick={() => handleDeleteIngredient(ing.id)}
+                                      aria-label="Remover item da ficha técnica"
+                                      title="Remover ingrediente"
+                                      className="p-2 text-gray-300 hover:text-red-500 transition-colors"
+                                     >
+                                        <Trash2 size={18} />
+                                     </button>
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
-                          <div className="flex items-center gap-4">
-                             <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl border border-gray-200">
-                               <input 
-                                 type="number"
-                                 step="0.001"
-                                 value={editingIngValues[ing.id] ?? ing.quantity}
-                                 aria-label={`Quantidade de ${(ing as any).inventory_item?.name}`}
-                                 title="Ajustar quantidade na ficha técnica"
-                                 onChange={(e) => handleUpdateIngredient(ing.id, e.target.value)}
-                                 className="w-16 font-black text-gray-900 outline-none bg-transparent text-center"
-                               />
-                               <span className="text-xs font-bold text-gray-400">{(ing as any).inventory_item?.unit}</span>
-                             </div>
-                             <button 
-                              onClick={() => handleDeleteIngredient(ing.id)}
-                              aria-label="Remover item da ficha técnica"
-                              title="Remover ingrediente"
-                              className="p-2 text-gray-300 hover:text-red-500 transition-colors"
-                             >
-                                <Trash2 size={18} />
-                             </button>
-                          </div>
-                        </div>
-                      ))}
+                        ));
+                      })()}
                     </div>
 
                     <div className="mt-8 pt-8 border-t border-dashed border-gray-200 flex justify-between items-center">
@@ -877,6 +965,127 @@ export const FinancePage = () => {
         </motion.div>
       )}
 
+      {activeTab === 'reports' && (
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="space-y-6"
+        >
+          <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-black text-gray-900">Relatório Diário de Lucro</h2>
+              <p className="text-gray-500">Selecione uma data para ver o desempenho real.</p>
+            </div>
+            <div className="flex items-center gap-3 bg-gray-50 p-2 rounded-2xl border border-gray-100">
+              <span className="text-sm font-bold text-gray-400 ml-2">DATA:</span>
+              <input 
+                type="date" 
+                value={selectedReportDate}
+                title="Escolher data do relatório"
+                placeholder="Selecione uma data"
+                onChange={(e) => setSelectedReportDate(e.target.value)}
+                className="bg-white px-4 py-2 rounded-xl font-bold text-gray-700 outline-none border border-gray-100 shadow-sm focus:border-orange-500 transition-colors"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-gray-400 text-sm font-bold uppercase mb-1">Faturamento</p>
+              <h3 className="text-2xl font-black text-gray-900">{formatCurrency(reportData.revenue)}</h3>
+            </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-red-400 text-sm font-bold uppercase mb-1">Custo Insumos (CMV)</p>
+              <h3 className="text-2xl font-black text-gray-900 text-red-600">-{formatCurrency(reportData.cmv)}</h3>
+            </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-orange-400 text-sm font-bold uppercase mb-1">Entrega (18%)</p>
+              <h3 className="text-2xl font-black text-orange-600">-{formatCurrency(reportData.courierCosts)}</h3>
+            </div>
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+              <p className="text-blue-400 text-sm font-bold uppercase mb-1">Despesas Extras</p>
+              <h3 className="text-2xl font-black text-blue-600">-{formatCurrency(reportData.expenses)}</h3>
+            </div>
+            <div className={cn(
+              "p-6 rounded-3xl shadow-lg border-2",
+              reportData.netProfit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+            )}>
+              <p className={cn("text-sm font-bold uppercase mb-1", reportData.netProfit >= 0 ? "text-green-600" : "text-red-600")}>
+                Lucro Líquido Real
+              </p>
+              <h3 className={cn("text-3xl font-black", reportData.netProfit >= 0 ? "text-green-700" : "text-red-700")}>
+                {formatCurrency(reportData.netProfit)}
+              </h3>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="p-6 border-b border-gray-50 flex items-center justify-between">
+              <h3 className="font-black text-gray-900 flex items-center gap-2">
+                <ShoppingCart size={20} className="text-orange-600" />
+                Vendas do Dia ({reportData.orders.length})
+              </h3>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="bg-gray-50 text-gray-400 text-xs font-black uppercase tracking-wider">
+                  <tr>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Cliente</th>
+                    <th className="px-6 py-4">Valor Pedido</th>
+                    <th className="px-6 py-4">Insumos</th>
+                    <th className="px-6 py-4">Entrega (18%)</th>
+                    <th className="px-6 py-4 text-right">Lucro Real</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {reportData.orders.map((o: any) => (
+                    <tr key={o.id} className="hover:bg-gray-50 transition-colors transition-all duration-200 group">
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-black uppercase",
+                          o.status === 'delivered' ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"
+                        )}>
+                          {o.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <p className="font-bold text-gray-800">{o.customer_name}</p>
+                        <p className="text-xs text-gray-400 font-medium">#{o.id}</p>
+                      </td>
+                      <td className="px-6 py-4 font-bold text-gray-900">
+                        {formatCurrency(o.total_price)}
+                      </td>
+                      <td className="px-6 py-4 font-bold text-red-500 text-sm">
+                        -{formatCurrency(o.cmv)}
+                      </td>
+                      <td className="px-6 py-4 font-bold text-orange-500 text-sm">
+                        -{formatCurrency(o.courierCost)}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className={cn(
+                          "font-black text-lg",
+                          o.profit >= 0 ? "text-green-600" : "text-red-600"
+                        )}>
+                          {formatCurrency(o.profit)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                  {reportData.orders.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-gray-400 font-bold">
+                        Nenhum pedido encontrado para esta data.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
       {/* MODAL INGREDIENT (Ficha Técnica Add) */}
       <AnimatePresence>
         {isAddingIngredient && (
@@ -909,9 +1118,15 @@ export const FinancePage = () => {
                       className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none"
                     >
                       <option value="">Escolha...</option>
-                      {inventory.map(inv => (
-                        <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
-                      ))}
+                      {(() => {
+                        const currentProduct = products.find(p => p.id === selectedProductId);
+                        const existingIngIds = currentProduct?.ingredients.map(ing => ing.inventory_item_id) || [];
+                        return inventory
+                          .filter(inv => !existingIngIds.includes(inv.id))
+                          .map(inv => (
+                            <option key={inv.id} value={inv.id}>{inv.name} ({inv.unit})</option>
+                          ));
+                      })()}
                     </select>
                   </div>
                   <div>
@@ -996,7 +1211,9 @@ export const FinancePage = () => {
                       onChange={(e) => setNewMaterial(p => ({ ...p, category: e.target.value }))}
                       className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
                     >
-                      <option value="Proteína">Proteína</option>
+                      <option value="Carne">Carne</option>
+                      <option value="Queijo">Queijo</option>
+                      <option value="Hortifruti">Hortifruti</option>
                       <option value="Bebida">Bebida</option>
                       <option value="Embalagem">Embalagem</option>
                       <option value="Insumo">Insumo Geral</option>
