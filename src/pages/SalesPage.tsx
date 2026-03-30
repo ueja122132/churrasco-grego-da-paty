@@ -19,7 +19,8 @@ import {
   Truck,
   Copy,
   Trophy,
-  Star
+  Star,
+  MapPin
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../context/AuthContext";
@@ -77,6 +78,16 @@ export const SalesPage = () => {
   const [useReward, setUseReward] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  
+  // Guest States
+  const [guestName, setGuestName] = useState(localStorage.getItem('guest_name') || "");
+  const [guestPhone, setGuestPhone] = useState(localStorage.getItem('guest_phone') || "");
+  const [showGuestForm, setShowGuestForm] = useState(false);
+  const [guestLocation, setGuestLocation] = useState<{lat: number, lng: number, address: string} | null>(
+    localStorage.getItem('guest_location') ? JSON.parse(localStorage.getItem('guest_location')!) : null
+  );
+  const [showLocationExplainer, setShowLocationExplainer] = useState(false);
+  const [isCapturingLocation, setIsCapturingLocation] = useState(false);
 
   const getStoreStatusMessage = () => {
     if (!org?.operating_hours) return "Loja Aberta";
@@ -164,30 +175,7 @@ export const SalesPage = () => {
       .catch(err => console.error("Erro ao carregar ingredientes extras:", err));
   }, [org]);
 
-  useEffect(() => {
-    if (user?.id) {
-      fetch(`/api/users/${user.id}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.points !== undefined) {
-            login({ ...user, points: data.points });
-          }
-        })
-        .catch(err => console.error("Erro ao atualizar pontos:", err));
-    }
-  }, [user?.id]);
-
-  useEffect(() => {
-    const onPointsUpdate = ({ userId, points }: { userId: number, points: number }) => {
-      if (user && user.id === userId) {
-        login({ ...user, points });
-      }
-    };
-    socket.on("user:points_update", onPointsUpdate);
-    return () => {
-      socket.off("user:points_update", onPointsUpdate);
-    };
-  }, [user, login]);
+  // Removing points listener as per "no more registration"
 
   const lastOrderRef = useRef<Order | null>(null);
   useEffect(() => {
@@ -263,11 +251,6 @@ export const SalesPage = () => {
   };
 
   const addToCart = (product: Product, selectedIngredients: string[], extras: ExtraIngredient[]) => {
-    if (!user) {
-      setSelectedProduct(null); // Fechar modal de ingredientes antes de pedir login
-      setNeedsLogin(true);
-      return;
-    }
     const ingredientsStr = product.ingredients || "";
     const allIngredients = ingredientsStr.split(',').map(i => i.trim()).filter(i => i !== "");
     const removedIngredients = allIngredients.filter(i => !selectedIngredients.includes(i));
@@ -331,15 +314,15 @@ export const SalesPage = () => {
   ];
 
   const placeOrder = async () => {
-    if (!user) {
-      setNeedsLogin(true); // show inline login modal, don't lose the cart!
-      return;
-    }
     if (cart.length === 0) return;
 
-    // Verificar se o usuário tem localização salva (Latitude/Longitude são obrigatórios agora)
-    if (!user.latitude || !user.longitude) {
-      setShowLocationPicker(true);
+    if (!guestName || !guestPhone) {
+      setShowGuestForm(true);
+      return;
+    }
+
+    if (!guestLocation) {
+      setShowLocationExplainer(true);
       return;
     }
 
@@ -355,36 +338,38 @@ export const SalesPage = () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: user.id,
-          customer_name: user.name,
-          customer_phone: user.phone,
+          user_id: user?.id || null,
+          customer_name: guestName,
+          customer_phone: guestPhone,
           items: cart,
           total_price: total,
           payment_status: 'pending',
-          use_reward: useReward,
-          address: user.address,
-          latitude: user.latitude,
-          longitude: user.longitude,
+          use_reward: false, // Fidelidade removida
+          address: guestLocation.address,
+          latitude: guestLocation.lat,
+          longitude: guestLocation.lng,
           payment_method: paymentMethod
         })
       });
-      if (res.status === 401) {
-        logout();
-        navigate("/login");
-        throw new Error("Sua sessão expirou. Por favor, faça login novamente.");
-      }
+      
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.error || "Erro ao criar pedido");
       }
       const data = await res.json();
       console.log("[SalesPage] Order created successfully:", data);
+      
+      // Salvar dados do visitante para a próxima vez
+      localStorage.setItem('guest_name', guestName);
+      localStorage.setItem('guest_phone', guestPhone);
+      localStorage.setItem('guest_location', JSON.stringify(guestLocation));
+
       setLastOrder(data);
       setUseReward(false);
 
       if (paymentMethod === 'delivery') {
         setIsOrdering(false);
-        setCart([]); // Clear cart for delivery immediately
+        setCart([]); 
         notify("Pedido realizado com sucesso! O pagamento será feito na entrega.", "success");
         return;
       }
@@ -406,7 +391,6 @@ export const SalesPage = () => {
         if (pixRes.ok) {
           const pixJson = await pixRes.json();
           setPixData(pixJson);
-          // Save mp_payment_id to the order
           await fetch(`/api/orders/${data.id}/payment`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -426,32 +410,49 @@ export const SalesPage = () => {
     }
   };
 
-  const handleLocationDuringCheckout = async (lat: number, lng: number, address: string) => {
-    if (!user) return;
-    try {
-      setIsUpdatingProfile(true);
-      // Salvar no perfil para uso futuro
-      const { error } = await supabase
-        .from('profiles')
-        .update({ latitude: lat, longitude: lng, address })
-        .eq('id', user.id);
-
-      if (error) throw error;
-      
-      // Atualizar estado local do user no AuthContext
-      await login({ ...user, latitude: lat, longitude: lng, address });
-      
-      setShowLocationPicker(false);
-      // O useEffect ou a próxima tentativa de placeOrder agora terá as coordenadas
-      notify("Localização salva! Finalizando seu pedido...", "success");
-      
-      // Chamada recursiva ou trigger para finalizar o pedido agora que tem GPS
-      setTimeout(() => placeOrder(), 500);
-    } catch (error: any) {
-      alert("Erro ao salvar localização: " + error.message);
-    } finally {
-      setIsUpdatingProfile(false);
+  const requestLocation = () => {
+    if (!navigator.geolocation) {
+      notify("Seu navegador não suporta GPS. Por favor, digite seu endereço.", "error");
+      setShowLocationPicker(true);
+      setShowLocationExplainer(false);
+      return;
     }
+
+    setIsCapturingLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        // Tentar buscar endereço básico via lat/lng se quiser, 
+        // mas aqui vamos apenas salvar as coordenadas para o entregador.
+        const locationData = { lat: latitude, lng: longitude, address: "Localização via GPS Principal" };
+        setGuestLocation(locationData);
+        localStorage.setItem('guest_location', JSON.stringify(locationData));
+        setIsCapturingLocation(false);
+        setShowLocationExplainer(false);
+        notify("Localização capturada com sucesso!", "success");
+        // Disparar o pedido automaticamente após capturar
+        setTimeout(() => placeOrder(), 500);
+      },
+      (error) => {
+        console.error("GPS Error:", error);
+        setIsCapturingLocation(false);
+        setShowLocationExplainer(false);
+        // Se falhar ou negar, abre o mapa manual como plano B
+        notify("Não conseguimos seu GPS. Por favor, marque no mapa.", "warning");
+        setShowLocationPicker(true);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
+
+  const handleLocationDuringCheckout = async (lat: number, lng: number, address: string) => {
+    const locationData = { lat, lng, address };
+    setGuestLocation(locationData);
+    localStorage.setItem('guest_location', JSON.stringify(locationData));
+    setShowLocationPicker(false);
+    notify("Localização confirmada! Agora finalize seu pedido.", "success");
+    // Agora que tem localização, termina o pedido
+    setTimeout(() => placeOrder(), 500);
   };
 
   const confirmPayment = async () => {
@@ -505,7 +506,7 @@ export const SalesPage = () => {
             <span className="text-gradient leading-tight">{org?.name || "Premium Store"}</span>
           </h1>
           <p className="text-slate-500 mt-2 font-medium tracking-wide">
-            {user ? `Bem-vindo(a), ${user.name}!` : "Bem-vindo ao melhor sabor da região!"}
+            {guestName ? `Bem-vindo(a) de volta, ${guestName}!` : "Bem-vindo ao melhor sabor da região!"}
           </p>
           <div className="mt-3 flex items-center gap-2">
             <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-full px-3 py-1">
@@ -521,70 +522,7 @@ export const SalesPage = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-12">
-          {/* Grego Points Dashboard - PREMIUM */}
-          {user && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-[2.5rem] shadow-glow text-white relative overflow-hidden"
-            >
-              {/* Background Glows */}
-              <div className="absolute -top-10 -right-10 w-40 h-40 bg-orange-500/20 rounded-full blur-3xl" />
-              <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-orange-600/10 rounded-full blur-3xl" />
-              
-              <div className="relative flex flex-col md:flex-row items-center justify-between gap-6">
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 bg-white/10 backdrop-blur-md rounded-2xl flex items-center justify-center border border-white/20 shadow-inner">
-                    <Trophy size={32} className="text-orange-400" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-black tracking-tight uppercase italic flex items-center gap-2">
-                       Grego Points
-                       <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full not-italic tracking-normal">Beta</span>
-                    </h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      {user.points >= 500 ? (
-                        <span className="flex items-center gap-1 text-xs font-bold text-yellow-400">
-                          <Star size={12} fill="currentColor" /> Cliente Ouro (VIP)
-                        </span>
-                      ) : user.points >= 300 ? (
-                        <span className="flex items-center gap-1 text-xs font-bold text-gray-300">
-                           Cliente Prata
-                        </span>
-                      ) : user.points >= 100 ? (
-                        <span className="flex items-center gap-1 text-xs font-bold text-orange-300">
-                           Cliente Bronze
-                        </span>
-                      ) : (
-                        <span className="text-xs font-bold text-slate-400">Nível Novato</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 w-full max-w-sm">
-                  <div className="flex justify-between items-end mb-2">
-                    <span className="text-4xl font-black text-orange-500">{user.points} <span className="text-xs text-white/60 tracking-widest uppercase ml-1">pts</span></span>
-                    <span className="text-[10px] font-bold text-white/40 uppercase">Próxima meta: 100 pts</span>
-                  </div>
-                  
-                  {/* Progress Bar */}
-                  <div className="h-3 w-full bg-white/5 rounded-full overflow-hidden border border-white/10">
-                    <motion.div 
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min((user.points % 100), 100)}%` }}
-                      className="h-full bg-gradient-to-r from-orange-600 to-orange-400 rounded-full shadow-[0_0_15px_rgba(234,88,12,0.5)]"
-                    />
-                  </div>
-                  <p className="text-[10px] text-white/50 mt-2 font-medium">
-                    {user.points >= 100 
-                      ? "✨ Você já pode resgatar seu desconto de 30%!" 
-                      : `Faltam ${100 - (user.points % 100)} pontos para sua próxima recompensa!`}
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          )}
+          {/* Grego Points Dashboard - REMOVED for simplification */}
 
           {categories.map(cat => {
             const catProducts = products.filter(p => p.category === cat.id);
@@ -784,81 +722,173 @@ export const SalesPage = () => {
           )}
 
           <div className="space-y-4">
-            {needsLogin && (
-              <div className="fixed inset-0 z-[150] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setNeedsLogin(false)}>
-                <div className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-                  <div className="w-12 h-1 bg-gray-200 rounded-full mx-auto mb-5" />
-                  <div className="text-center mb-6">
-                    <div className="text-4xl mb-2">🔐</div>
-                    <h3 className="text-xl font-black text-gray-900">Quase lá!</h3>
-                    <p className="text-gray-500 mt-1 text-sm">Para finalizar seu pedido, você precisa entrar na sua conta ou criar uma nova. Seus itens serão mantidos! 🛒</p>
+            {showGuestForm && (
+              <div className="fixed inset-0 z-[150] flex items-end justify-center bg-black/60 backdrop-blur-sm">
+                <div className="bg-white w-full max-w-md rounded-t-[2.5rem] p-8 shadow-2xl animate-in slide-in-from-bottom duration-300">
+                  <div className="w-12 h-1 bg-gray-200 rounded-full mx-auto mb-6" />
+                  <div className="flex items-center gap-4 mb-6">
+                    <div className="w-12 h-12 bg-orange-100 rounded-2xl flex items-center justify-center text-orange-600">
+                      <ShoppingBag size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-gray-900 tracking-tighter uppercase italic">Dados para Entrega</h3>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Preencha rapidinho para pedir</p>
+                    </div>
                   </div>
-                  <div className="space-y-3">
-                    <Link
-                      to="/login"
-                      className="flex items-center justify-center gap-2 w-full py-4 bg-orange-600 text-white rounded-2xl font-black text-sm shadow-lg hover:bg-orange-700 transition-all"
-                      onClick={() => setNeedsLogin(false)}
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1 mb-1.5 block">Seu Nome</label>
+                      <input 
+                        type="text" 
+                        placeholder="Ex: Ajeu Valverde"
+                        value={guestName}
+                        onChange={(e) => setGuestName(e.target.value)}
+                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl p-4 text-sm font-bold focus:border-orange-500 outline-none transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1 mb-1.5 block">WhatsApp</label>
+                      <input 
+                        type="tel" 
+                        placeholder="Ex: (38) 99999-9999"
+                        value={guestPhone}
+                        onChange={(e) => setGuestPhone(e.target.value)}
+                        className="w-full bg-gray-50 border-2 border-gray-100 rounded-2xl p-4 text-sm font-bold focus:border-orange-500 outline-none transition-all"
+                      />
+                    </div>
+                    
+                    <button 
+                      onClick={() => {
+                        if(guestName.length < 3 || guestPhone.length < 8) {
+                          notify("Preencha seu nome e telefone corretamente!", "error");
+                          return;
+                        }
+                        setShowGuestForm(false);
+                        setShowLocationExplainer(true);
+                      }}
+                      className="w-full py-5 bg-orange-600 text-white rounded-[1.5rem] font-black uppercase text-xs tracking-widest shadow-xl shadow-orange-200 hover:scale-[1.02] active:scale-[0.98] transition-all"
                     >
-                      <LogIn size={18} /> Entrar na minha conta
-                    </Link>
-                    <Link
-                      to="/register?type=customer"
-                      className="flex items-center justify-center gap-2 w-full py-4 bg-white text-orange-600 rounded-2xl font-black text-sm border-2 border-orange-200 hover:bg-orange-50 transition-all"
-                      onClick={() => setNeedsLogin(false)}
-                    >
-                      <UserPlus size={18} /> Criar conta grátis
-                    </Link>
-                    <button onClick={() => setNeedsLogin(false)} className="w-full py-3 text-gray-400 text-sm font-bold">
-                      Continuar navegando
+                      Continuar para Localização
+                    </button>
+                    <button onClick={() => setShowGuestForm(false)} className="w-full py-2 text-gray-300 font-bold text-[10px] uppercase tracking-widest">
+                       Voltar ao Carrinho
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {!user && (
-              <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 text-sm text-orange-800 mb-4">
-                <p className="font-bold flex items-center gap-2 mb-2">
-                  <LogIn size={16} /> Entre para pedir
-                </p>
-                <div className="flex gap-2">
-                  <Link to="/login" className="flex-1 text-center py-2 bg-orange-600 text-white rounded-xl font-bold text-xs">Entrar</Link>
-                  <Link to="/register?type=customer" className="flex-1 text-center py-2 bg-white text-orange-600 border border-orange-200 rounded-xl font-bold text-xs">Cadastrar</Link>
-                </div>
+            {showLocationExplainer && (
+              <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl text-center overflow-hidden relative"
+                >
+                  <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-orange-500 to-orange-300" />
+                  
+                  <div className="w-20 h-20 bg-orange-100 rounded-3xl flex items-center justify-center mx-auto mb-6 text-orange-600 shadow-inner">
+                    <MapPin size={40} />
+                  </div>
+
+                  <h3 className="text-2xl font-black text-gray-900 tracking-tighter uppercase italic leading-none mb-3">Liberar Entrega?</h3>
+                  <p className="text-gray-500 text-sm font-medium leading-relaxed mb-8">
+                    Para que o nosso entregador chegue <span className="text-orange-600 font-bold">exatamente</span> na sua porta, precisamos que você autorize o seu GPS.
+                  </p>
+
+                  <div className="space-y-3">
+                    <button 
+                      disabled={isCapturingLocation}
+                      onClick={requestLocation}
+                      className="w-full py-5 bg-slate-900 text-white rounded-[1.5rem] font-black uppercase text-xs tracking-widest shadow-xl shadow-slate-200 flex items-center justify-center gap-3 active:scale-95 transition-all"
+                    >
+                      {isCapturingLocation ? (
+                        <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <>Sim, Ativar GPS! <ArrowRight size={18} className="text-orange-500" /></>
+                      )}
+                    </button>
+                    
+                    <button 
+                      disabled={isCapturingLocation}
+                      onClick={() => {
+                        setShowLocationExplainer(false);
+                        setShowLocationPicker(true);
+                      }}
+                      className="w-full py-3 text-gray-300 font-bold text-[10px] uppercase tracking-widest hover:text-gray-500 transition-colors"
+                    >
+                       Escolher no mapa manualmente
+                    </button>
+                  </div>
+                </motion.div>
               </div>
             )}
 
-            <div className="flex bg-gray-100 p-1 rounded-2xl mb-4">
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('pix')}
-                className={cn(
-                  "flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
-                  paymentMethod === 'pix' ? "bg-white text-green-600 shadow-sm" : "text-gray-400"
-                )}
-              >
-                <QrCode size={16} /> PIX
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('delivery')}
-                className={cn(
-                  "flex-1 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2",
-                  paymentMethod === 'delivery' ? "bg-white text-blue-600 shadow-sm" : "text-gray-400"
-                )}
-              >
-                <Truck size={16} /> Na Entrega
-              </button>
+            <div className="space-y-3 mb-6">
+              <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Como deseja pagar?</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('pix')}
+                  className={cn(
+                    "relative flex flex-col items-center justify-center p-4 rounded-[1.5rem] border-2 transition-all group overflow-hidden",
+                    paymentMethod === 'pix' 
+                      ? "border-green-500 bg-green-50/50 text-green-700 shadow-lg shadow-green-100" 
+                      : "border-gray-100 bg-white text-gray-400 hover:border-gray-200"
+                  )}
+                >
+                  <div className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center mb-2 transition-transform",
+                    paymentMethod === 'pix' ? "bg-green-600 text-white scale-110" : "bg-gray-100"
+                  )}>
+                    <QrCode size={20} />
+                  </div>
+                  <span className="text-[11px] font-black uppercase tracking-tighter italic">Pagar Agora</span>
+                  <span className="text-[9px] font-bold opacity-60">Via PIX</span>
+                  {paymentMethod === 'pix' && (
+                    <motion.div layoutId="payActive" className="absolute top-2 right-2 w-2 h-2 bg-green-500 rounded-full" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('delivery')}
+                  className={cn(
+                    "relative flex flex-col items-center justify-center p-4 rounded-[1.5rem] border-2 transition-all group overflow-hidden",
+                    paymentMethod === 'delivery' 
+                      ? "border-blue-500 bg-blue-50/50 text-blue-700 shadow-lg shadow-blue-100" 
+                      : "border-gray-100 bg-white text-gray-400 hover:border-gray-200"
+                  )}
+                >
+                  <div className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center mb-2 transition-transform",
+                    paymentMethod === 'delivery' ? "bg-blue-600 text-white scale-110" : "bg-gray-100"
+                  )}>
+                    <Truck size={20} />
+                  </div>
+                  <span className="text-[11px] font-black uppercase tracking-tighter italic">Na Entrega</span>
+                  <span className="text-[9px] font-bold opacity-60">PIX ou Dinheiro</span>
+                  {paymentMethod === 'delivery' && (
+                    <motion.div layoutId="payActive" className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full" />
+                  )}
+                </button>
+              </div>
             </div>
 
             <button
               disabled={isOrdering || cart.length === 0 || !isShopOpen}
               onClick={placeOrder}
-              title={user ? "Finalizar Pedido" : "Entrar e Pedir"}
-              className="w-full bg-black text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              className="w-full bg-slate-900 text-white py-5 rounded-[1.5rem] font-black uppercase text-xs tracking-widest flex items-center justify-center gap-3 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-xl shadow-slate-200 group"
             >
-              {isOrdering ? "Processando..." : !isShopOpen ? "Loja Fechada" : user ? "Finalizar Pedido" : "Entrar e Pedir"}
-              <ArrowRight size={20} />
+              {isOrdering ? (
+                <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+              ) : !isShopOpen ? (
+                "Loja Fechada"
+              ) : (
+                "Finalizar Pedido"
+              )}
+              {!isOrdering && isShopOpen && <ArrowRight size={20} className="text-orange-500 group-hover:translate-x-1 transition-transform" />}
             </button>
           </div>
         </div>
@@ -869,7 +899,7 @@ export const SalesPage = () => {
           <LocationPicker 
             onClose={() => setShowLocationPicker(false)}
             onLocationSelected={handleLocationDuringCheckout}
-            initialLocation={user?.latitude && user?.longitude ? { lat: Number(user.latitude), lng: Number(user.longitude) } : undefined}
+            initialLocation={guestLocation ? { lat: guestLocation.lat, lng: guestLocation.lng } : undefined}
           />
         )}
       </AnimatePresence>

@@ -20,6 +20,7 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
   const [products, setProducts] = useState<Product[]>([]);
   const [notifEnabled, setNotifEnabled] = useState(false);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const [focusOrder, setFocusOrder] = useState<Order | null>(null);
 
 
   // Play a beep alert
@@ -153,6 +154,11 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
         body: JSON.stringify({ status })
       });
       if (!res.ok) throw new Error('Falha ao atualizar status');
+
+      // Se marcou como pronto, fecha o foco
+      if (status === 'ready' && focusOrder?.id === id) {
+        setFocusOrder(null);
+      }
     } catch (error) {
       console.error(error);
       alert("Erro ao atualizar o status do pedido");
@@ -202,126 +208,176 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="flex flex-col gap-4">
         <AnimatePresence>
-          {activeOrders.map(order => (
+          {activeOrders.map((order, idx) => (
             <motion.div
               key={order.id}
               layout
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
               className={cn(
-                "bg-white p-6 rounded-3xl border-2 shadow-sm relative overflow-hidden flex flex-col",
-                order.status === 'pending' ? "border-red-100" : "border-orange-100"
+                "bg-white p-5 rounded-3xl border-2 shadow-sm relative overflow-hidden flex flex-col md:flex-row items-center gap-6",
+                idx === 0 ? "border-orange-500 bg-orange-50/20" : "border-gray-100 opacity-60 grayscale-[0.5]"
               )}
             >
-              {order.status === 'pending' && (
-                <div className="absolute top-0 right-0 bg-red-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-widest">
-                  Novo
+              {idx === 0 && (
+                <div className="absolute top-0 left-0 bg-orange-600 text-white text-[10px] font-black px-4 py-1 rounded-br-2xl uppercase tracking-[0.2em] italic">
+                  FAZER AGORA! 🍢
                 </div>
               )}
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="font-bold text-xl">#{order.id}</h3>
-                  <p className="text-sm font-medium text-gray-600">{order.customer_name}</p>
-                  <div className="mt-1 flex gap-1 items-center">
+              
+              <div className="flex-1 w-full md:w-auto">
+                 <div className="flex items-center gap-4">
+                    <span className="text-3xl font-black text-slate-900 tracking-tighter">#{order.id}</span>
+                    <div>
+                      <h3 className="font-black text-lg uppercase italic tracking-tighter">{order.customer_name}</h3>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none mt-0.5">
+                        Pedido às {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                 </div>
+
+                 <div className="flex gap-2 mt-3">
                     <div className={cn(
-                      "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                      "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest",
                       order.payment_status === 'paid' ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                     )}>
-                      {order.payment_status === 'paid' ? "Pago" : "Pendente"}
+                      {order.payment_status === 'paid' ? "PAGO" : "NA ENTREGA"}
                     </div>
-                    {(order as any).payment_method === 'delivery' && (
-                      <div className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700 flex items-center gap-1">
-                        <Truck size={10} /> Entrega
+                    {order.status === 'preparing' && (
+                      <div className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-orange-100 text-orange-700 animate-pulse">
+                        EM PREPARO
                       </div>
                     )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-1 text-gray-400 text-xs text-right">
-                  <span className="block">{new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
+                 </div>
               </div>
 
-              <div className="space-y-2 mb-6 flex-1">
-                {order.items.map((item, idx) => {
-                  const product = products.find(p => p.id === item.id || p.name === item.name);
-                  const ingredients = item.ingredients || product?.ingredients;
-                  const isChurrasco = product?.category === 'churrasco' || item.name.toLowerCase().includes('churrasco') || item.name.toLowerCase().includes('carne');
-
-                  return (
-                    <div key={idx} className="flex flex-col bg-white p-3 rounded-2xl border border-gray-100 shadow-sm">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-gray-900 uppercase">{item.quantity}x {item.name}</span>
-                      </div>
-
-                      {isChurrasco && ingredients && (
-                        <div className="mt-1.5 pt-1.5 border-t border-gray-50">
-                          <p className="text-[11px] text-gray-500 leading-relaxed italic">
-                            {ingredients}
-                          </p>
-                        </div>
-                      )}
-
-                      {item.removedIngredients && item.removedIngredients.length > 0 && (
-                        <div className="mt-1.5 px-2 py-1 bg-red-50 rounded-lg border border-red-100">
-                          <span className="text-[9px] text-red-600 font-black uppercase flex items-center gap-1">
-                            <X size={10} strokeWidth={3} /> SEM: {item.removedIngredients.join(', ')}
-                          </span>
-                        </div>
-                      )}
-
-                      {item.extraIngredients && item.extraIngredients.length > 0 && (
-                        <div className="mt-1.5 px-2 py-1 bg-green-50 rounded-lg border border-green-100">
-                          <span className="text-[9px] text-green-700 font-black uppercase flex items-center gap-1">
-                            <Plus size={10} strokeWidth={3} /> EXTRA: {(item.extraIngredients as any[]).map(e => e.name).join(', ')}
-                          </span>
-                        </div>
-                      )}
+              <div className="flex flex-col gap-2 flex-1 w-full justify-center md:justify-start">
+                  {order.items.map((item, i) => (
+                    <div key={i} className="flex flex-col gap-1 p-3 bg-white rounded-2xl border-2 border-gray-100">
+                       <span className="font-black text-xs uppercase tracking-tighter italic">{item.quantity}x {item.name}</span>
+                       {item.ingredients && (
+                         <p className="text-[9px] text-gray-500 font-medium italic leading-none">{item.ingredients}</p>
+                       )}
                     </div>
-                  );
-                })}
+                  ))}
               </div>
 
-              <div className="mt-auto pt-4 border-t border-gray-50 flex flex-col gap-2">
-                {order.payment_status === 'pending' && (
-                  <button
-                    onClick={() => confirmDeliveryPayment(order.id)}
-                    className="w-full bg-blue-600 text-white py-2.5 rounded-2xl text-xs font-bold hover:bg-blue-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-100 active:scale-95"
-                  >
-                    <DollarSign size={14} /> {(order as any).payment_method === 'pix' ? "Confirmar Pix Manual" : "Confirmar Recebimento"}
-                  </button>
-                )}
-
-                <div className="flex gap-2">
-                  {order.status === 'pending' ? (
-                    <button
-                      onClick={() => updateStatus(order.id, 'preparing')}
-                      className="flex-1 bg-orange-600 text-white py-3 rounded-2xl font-bold hover:bg-orange-700 transition-all shadow-lg shadow-orange-100 active:scale-95"
-                    >
-                      Começar Preparo
-                    </button>
-                  ) : (
-                    <button
-                      disabled={order.payment_status === 'pending' && (order as any).payment_method === 'pix'}
-                      onClick={() => updateStatus(order.id, 'ready')}
-                      className={cn(
-                        "flex-1 bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-green-100 active:scale-95",
-                        order.payment_status === 'pending' && (order as any).payment_method === 'pix' ? "opacity-50 cursor-not-allowed" : ""
-                      )}
-                    >
-                      <CheckCircle2 size={20} /> Pronto
-                    </button>
-                  )}
-                </div>
-
-                {order.payment_status === 'pending' && (order as any).payment_method === 'pix' && (
-                  <p className="text-[10px] text-gray-400 text-center italic mt-1 font-medium">Aguardando pagamento PIX para finalizar.</p>
-                )}
+              <div className="w-full md:w-auto flex gap-2">
+                 {order.status === 'pending' ? (
+                   <button
+                     onClick={() => {
+                        updateStatus(order.id, 'preparing');
+                        setFocusOrder(order);
+                     }}
+                     className="flex-1 md:w-48 bg-orange-600 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl shadow-orange-200 active:scale-95 transition-all"
+                   >
+                     Começar Preparo
+                   </button>
+                 ) : (
+                   <button
+                     onClick={() => setFocusOrder(order)}
+                     className="flex-1 md:w-48 bg-slate-900 text-white py-4 rounded-2xl font-black uppercase text-xs tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
+                   >
+                     Ver Detalhes (Foco)
+                   </button>
+                 )}
               </div>
             </motion.div>
           ))}
+        </AnimatePresence>
+
+        {/* MODO FOCO - TELA CHEIA */}
+        <AnimatePresence>
+          {focusOrder && (
+            <div className="fixed inset-0 z-[200] bg-white flex flex-col p-6 overflow-y-auto">
+               <motion.div 
+                 initial={{ opacity: 0, y: 20 }}
+                 animate={{ opacity: 1, y: 0 }}
+                 exit={{ opacity: 0, y: 20 }}
+                 className="flex flex-col h-full"
+               >
+                 <header className="flex justify-between items-center mb-8">
+                    <div className="flex items-center gap-4">
+                      <button onClick={() => setFocusOrder(null)} className="p-4 bg-gray-100 rounded-2xl">
+                        <X size={32} />
+                      </button>
+                      <div>
+                        <h2 className="text-4xl font-black tracking-tighter uppercase italic">Pedido #{focusOrder.id}</h2>
+                        <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">{focusOrder.customer_name}</p>
+                      </div>
+                    </div>
+                    <div className="hidden md:block px-6 py-3 bg-orange-600 text-white rounded-3xl font-black uppercase tracking-widest text-lg animate-pulse">
+                      PREPARANDO AGORA...
+                    </div>
+                 </header>
+
+                 <div className="flex-1 space-y-6">
+                    {focusOrder.items.map((item, idx) => {
+                      const isChurrasco = item.name.toLowerCase().includes('churrasco') || item.name.toLowerCase().includes('carne');
+                      return (
+                        <div key={idx} className="bg-gray-50 p-8 rounded-[2.5rem] border-2 border-gray-100 shadow-sm">
+                           <div className="flex justify-between items-center mb-6">
+                              <span className="text-4xl font-black text-slate-900 uppercase italic tracking-tighter">
+                                 {item.quantity}x {item.name}
+                              </span>
+                              {isChurrasco && <ChefHat size={48} className="text-orange-500 opacity-20" />}
+                           </div>
+
+                           <div className="space-y-4">
+                              {item.ingredients && (
+                                <div className="bg-white p-6 rounded-3xl border border-gray-100">
+                                  <p className="text-[10px] font-black uppercase text-gray-400 tracking-[0.3em] mb-3">Composição Padrão:</p>
+                                  <p className="text-xl font-bold text-gray-600 leading-none tracking-tight">{item.ingredients}</p>
+                                </div>
+                              )}
+                              
+                              {/* REMOVIDOS - DESTAQUE VERMELHO */}
+                              {item.removedIngredients && item.removedIngredients.length > 0 && (
+                                 <div className="bg-red-50 p-6 rounded-3xl border-4 border-red-100 ring-4 ring-red-50">
+                                    <p className="text-[10px] font-black uppercase text-red-500 tracking-[0.3em] mb-3">⚠️ REMOVER (NÃO COLOCAR):</p>
+                                    <div className="flex flex-wrap gap-3">
+                                       {item.removedIngredients.map(rem => (
+                                         <span key={rem} className="px-4 py-2 bg-red-500 text-white rounded-xl text-xl font-black uppercase italic tracking-tighter">
+                                            - {rem}
+                                         </span>
+                                       ))}
+                                    </div>
+                                 </div>
+                              )}
+
+                              {/* EXTRAS - DESTAQUE VERDE */}
+                              {item.extraIngredients && (item.extraIngredients as any[]).length > 0 && (
+                                 <div className="bg-green-50 p-6 rounded-3xl border-4 border-green-100 ring-4 ring-green-50">
+                                    <p className="text-[10px] font-black uppercase text-green-600 tracking-[0.3em] mb-3">⭐ ADICIONAIS EXTRAS:</p>
+                                    <div className="flex flex-wrap gap-3">
+                                       {(item.extraIngredients as any[]).map(extra => (
+                                         <span key={extra.id} className="px-4 py-2 bg-green-600 text-white rounded-xl text-xl font-black uppercase italic tracking-tighter">
+                                            + {extra.name}
+                                         </span>
+                                       ))}
+                                    </div>
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                      );
+                    })}
+                 </div>
+
+                 <div className="mt-8 pt-8 border-t-2 border-dashed border-gray-200">
+                    <button 
+                      onClick={() => updateStatus(focusOrder.id, 'ready')}
+                      className="w-full py-10 bg-green-600 text-white rounded-[3rem] text-4xl font-black uppercase italic tracking-tighter shadow-2xl shadow-green-200 flex items-center justify-center gap-6 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                    >
+                      <CheckCircle2 size={48} /> FINALIZAR PEDIDO (PRONTO)
+                    </button>
+                 </div>
+               </motion.div>
+            </div>
+          )}
         </AnimatePresence>
       </div>
     </div>

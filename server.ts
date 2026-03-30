@@ -1803,6 +1803,19 @@ async function startServer() {
         ? process.env.VITE_APP_URL
         : `https://${req.get('host')}`;
 
+      const isLocal = appUrl.includes('localhost') || appUrl.includes('127.0.0.1');
+
+      const body: any = {
+        transaction_amount: parseFloat(total_price.toFixed(2)),
+        description: description || `Pedido #${order_id} - ${org.name}`,
+        payment_method_id: "pix",
+        payer: { email: "cliente@pedido.com" }
+      };
+
+      if (!isLocal) {
+        body.notification_url = `${appUrl}/api/webhook/mercadopago`;
+      }
+
       const mpRes = await fetch("https://api.mercadopago.com/v1/payments", {
         method: "POST",
         headers: {
@@ -1810,13 +1823,7 @@ async function startServer() {
           "Authorization": `Bearer ${org.mp_access_token}`,
           "X-Idempotency-Key": `order-${order_id}-${Date.now()}`
         },
-        body: JSON.stringify({
-          transaction_amount: parseFloat(total_price.toFixed(2)),
-          description: description || `Pedido #${order_id} - ${org.name}`,
-          payment_method_id: "pix",
-          payer: { email: "cliente@pedido.com" },
-          notification_url: `${appUrl}/api/webhook/mercadopago`
-        })
+        body: JSON.stringify(body)
       });
 
       const mpData = await mpRes.json();
