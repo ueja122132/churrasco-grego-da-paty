@@ -626,7 +626,9 @@ export const FinancePage = () => {
               <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col justify-between">
                  <div>
                    <p className="text-[10px] font-black text-gray-400 uppercase mb-1 tracking-widest">💸 Despesas</p>
-                   <p className="text-xl font-black text-red-500">- {formatCurrency(financialMetrics.expenses)}</p>
+                    <p className={`text-xl font-black ${financialMetrics.expenses > 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                      {financialMetrics.expenses > 0 ? `- ${formatCurrency(financialMetrics.expenses)}` : formatCurrency(0)}
+                    </p>
                  </div>
                  {financialMetrics.avulsas > 0 && (
                    <div className="mt-2 text-[9px] font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full w-fit">
@@ -636,7 +638,9 @@ export const FinancePage = () => {
               </div>
               <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-blue-100">
                 <p className="text-[10px] font-black text-blue-400 uppercase mb-1 tracking-widest">💳 Taxa MP</p>
-                <p className="text-xl font-black text-blue-600">- {formatCurrency(financialMetrics.mpFees)}</p>
+                 <p className={`text-xl font-black ${financialMetrics.mpFees > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
+                   {financialMetrics.mpFees > 0 ? `- ${formatCurrency(financialMetrics.mpFees)}` : formatCurrency(0)}
+                 </p>
               </div>
               <div className={cn("p-5 rounded-[2rem] shadow-lg text-white transition-all col-span-2 sm:col-span-1", financialMetrics.netProfit >= 0 ? "bg-orange-600" : "bg-red-600")}>
                 <p className="text-[10px] font-bold opacity-80 uppercase mb-1 tracking-widest text-white">📉 Lucro Líquido</p>
