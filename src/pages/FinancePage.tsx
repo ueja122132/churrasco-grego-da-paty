@@ -24,6 +24,10 @@ import { supabase } from "../supabase";
 import { Order, InventoryItem, Product, ProductIngredient } from "../types";
 import { cn } from "../lib/utils";
 
+// Utilitário: retorna a data local no formato YYYY-MM-DD (respeita fuso horário do dispositivo)
+// Usar toLocaleDateString('sv') é a forma correta — 'sv' (sueco) usa exatamente o padrão YYYY-MM-DD
+const getLocalDateString = (date = new Date()) => date.toLocaleDateString('sv');
+
 export const FinancePage = () => {
   const { org } = useTenant();
   const { notify } = useNotification();
@@ -31,11 +35,6 @@ export const FinancePage = () => {
   const isNested = location.pathname === '/admin';
   
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'simulator' | 'recipe' | 'reports'>('dashboard');
-  // Retorna a data local no formato YYYY-MM-DD (respeita o fuso horário do dispositivo, evitando bug UTC)
-  const getLocalDateString = () => {
-    const now = new Date();
-    return now.toLocaleDateString('sv'); // 'sv' (sueco) usa o formato YYYY-MM-DD com horário local
-  };
   const [selectedReportDate, setSelectedReportDate] = useState(getLocalDateString());
   const [orders, setOrders] = useState<Order[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -356,8 +355,10 @@ export const FinancePage = () => {
 
   // Daily Report Data
   const reportData = useMemo(() => {
-    const dayOrders = orders.filter(o => o.created_at.startsWith(selectedReportDate));
-    const dayExpenses = expenses.filter(e => (e.date || e.created_at).startsWith(selectedReportDate));
+    // Converte timestamp UTC do banco para data local (YYYY-MM-DD) antes de comparar
+    // Isso evita que pedidos feitos após 21h (Brasília) apareçam no dia errado
+    const dayOrders = orders.filter(o => new Date(o.created_at).toLocaleDateString('sv') === selectedReportDate);
+    const dayExpenses = expenses.filter(e => new Date(e.date || e.created_at).toLocaleDateString('sv') === selectedReportDate);
 
     const revenue = dayOrders.reduce((acc, o) => acc + o.total_price, 0);
     const cmv = dayOrders.reduce((acc, o) => {
