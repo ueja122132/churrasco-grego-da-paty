@@ -31,7 +31,12 @@ export const FinancePage = () => {
   const isNested = location.pathname === '/admin';
   
   const [activeTab, setActiveTab] = useState<'dashboard' | 'inventory' | 'simulator' | 'recipe' | 'reports'>('dashboard');
-  const [selectedReportDate, setSelectedReportDate] = useState(new Date().toISOString().split('T')[0]);
+  // Retorna a data local no formato YYYY-MM-DD (respeita o fuso horário do dispositivo, evitando bug UTC)
+  const getLocalDateString = () => {
+    const now = new Date();
+    return now.toLocaleDateString('sv'); // 'sv' (sueco) usa o formato YYYY-MM-DD com horário local
+  };
+  const [selectedReportDate, setSelectedReportDate] = useState(getLocalDateString());
   const [orders, setOrders] = useState<Order[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<(Product & { ingredients: ProductIngredient[] })[]>([]);
