@@ -642,7 +642,7 @@ export const FinancePage = () => {
                    {financialMetrics.mpFees > 0 ? `- ${formatCurrency(financialMetrics.mpFees)}` : formatCurrency(0)}
                  </p>
               </div>
-              <div className={cn("p-5 rounded-[2rem] shadow-lg text-white transition-all col-span-2 sm:col-span-1", financialMetrics.netProfit >= 0 ? "bg-orange-600" : "bg-red-600")}>
+              <div className={cn("p-5 rounded-[2rem] shadow-lg text-white transition-all col-span-2 sm:col-span-1", financialMetrics.netProfit >= 0 ? "bg-emerald-600 shadow-emerald-100" : "bg-red-600 shadow-red-100")}>
                 <p className="text-[10px] font-bold opacity-80 uppercase mb-1 tracking-widest text-white">📉 Lucro Líquido</p>
                 <p className="text-xl font-black text-white">{formatCurrency(financialMetrics.netProfit)}</p>
               </div>
@@ -1060,30 +1060,38 @@ export const FinancePage = () => {
               <h3 className="text-2xl font-black text-gray-900">{formatCurrency(reportData.revenue)}</h3>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <p className="text-red-400 text-sm font-bold uppercase mb-1">CMV (Insumos)</p>
-              <h3 className="text-2xl font-black text-red-600">-{formatCurrency(reportData.cmv)}</h3>
+              <p className={`text-sm font-bold uppercase mb-1 ${reportData.cmv > 0 ? 'text-red-400' : 'text-gray-400'}`}>CMV (Insumos)</p>
+              <h3 className={`text-2xl font-black ${reportData.cmv > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                {reportData.cmv > 0 ? `-${formatCurrency(reportData.cmv)}` : formatCurrency(0)}
+              </h3>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <p className="text-orange-400 text-sm font-bold uppercase mb-1">Entrega (18%)</p>
-              <h3 className="text-2xl font-black text-orange-600">-{formatCurrency(reportData.courierCosts)}</h3>
+              <p className={`text-sm font-bold uppercase mb-1 ${reportData.courierCosts > 0 ? 'text-orange-400' : 'text-gray-400'}`}>Entrega (18%)</p>
+              <h3 className={`text-2xl font-black ${reportData.courierCosts > 0 ? 'text-orange-600' : 'text-gray-400'}`}>
+                {reportData.courierCosts > 0 ? `-${formatCurrency(reportData.courierCosts)}` : formatCurrency(0)}
+              </h3>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-blue-100">
-              <p className="text-blue-400 text-sm font-bold uppercase mb-1">💳 Taxa MP</p>
-              <h3 className="text-2xl font-black text-blue-600">-{formatCurrency(reportData.mpFees)}</h3>
+              <p className={`text-sm font-bold uppercase mb-1 ${reportData.mpFees > 0 ? 'text-blue-400' : 'text-gray-400'}`}>💳 Taxa MP</p>
+              <h3 className={`text-2xl font-black ${reportData.mpFees > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
+                {reportData.mpFees > 0 ? `-${formatCurrency(reportData.mpFees)}` : formatCurrency(0)}
+              </h3>
               <p className="text-[10px] text-blue-300 font-bold mt-1">PIX {mpPixRate}% / Cartão {mpCardRate}%</p>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-              <p className="text-purple-400 text-sm font-bold uppercase mb-1">Despesas Extras</p>
-              <h3 className="text-2xl font-black text-purple-600">-{formatCurrency(reportData.expenses)}</h3>
+              <p className={`text-sm font-bold uppercase mb-1 ${reportData.expenses > 0 ? 'text-purple-400' : 'text-gray-400'}`}>Despesas Extras</p>
+              <h3 className={`text-2xl font-black ${reportData.expenses > 0 ? 'text-purple-600' : 'text-gray-400'}`}>
+                {reportData.expenses > 0 ? `-${formatCurrency(reportData.expenses)}` : formatCurrency(0)}
+              </h3>
             </div>
             <div className={cn(
-              "p-6 rounded-3xl shadow-lg border-2 col-span-2 md:col-span-1",
-              reportData.netProfit >= 0 ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+              "p-6 rounded-3xl shadow-lg border-2 col-span-2 md:col-span-1 transition-all",
+              reportData.netProfit >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"
             )}>
-              <p className={cn("text-sm font-bold uppercase mb-1", reportData.netProfit >= 0 ? "text-green-600" : "text-red-600")}>
+              <p className={cn("text-sm font-bold uppercase mb-1", reportData.netProfit >= 0 ? "text-emerald-600" : "text-red-600")}>
                 Lucro Líquido Real
               </p>
-              <h3 className={cn("text-3xl font-black", reportData.netProfit >= 0 ? "text-green-700" : "text-red-700")}>
+              <h3 className={cn("text-3xl font-black", reportData.netProfit >= 0 ? "text-emerald-700" : "text-red-700")}>
                 {formatCurrency(reportData.netProfit)}
               </h3>
             </div>
@@ -1127,15 +1135,15 @@ export const FinancePage = () => {
                       <td className="px-6 py-4 font-bold text-gray-900">
                         {formatCurrency(o.total_price)}
                       </td>
-                      <td className="px-6 py-4 font-bold text-red-500 text-sm">
-                        -{formatCurrency(o.cmv)}
-                      </td>
-                      <td className="px-6 py-4 font-bold text-orange-500 text-sm">
-                        -{formatCurrency(o.courierCost)}
-                      </td>
-                      <td className="px-6 py-4 font-bold text-blue-500 text-sm">
-                        -{formatCurrency(o.mpFee || 0)}
-                      </td>
+                      <td className={`px-6 py-4 font-bold text-sm ${o.cmv > 0 ? 'text-red-500' : 'text-gray-300'}`}>
+                         {o.cmv > 0 ? `-${formatCurrency(o.cmv)}` : formatCurrency(0)}
+                       </td>
+                       <td className={`px-6 py-4 font-bold text-sm ${o.courierCost > 0 ? 'text-orange-500' : 'text-gray-300'}`}>
+                         {o.courierCost > 0 ? `-${formatCurrency(o.courierCost)}` : formatCurrency(0)}
+                       </td>
+                       <td className={`px-6 py-4 font-bold text-sm ${o.mpFee > 0 ? 'text-blue-500' : 'text-gray-300'}`}>
+                         {o.mpFee > 0 ? `-${formatCurrency(o.mpFee)}` : formatCurrency(0)}
+                       </td>
                       <td className="px-6 py-4 text-right">
                         <span className={cn(
                           "font-black text-lg",
