@@ -3089,18 +3089,25 @@ Diretrizes:
                 if (org) {
                     const siteName = org.name || "Churrasco Grego da Paty";
                     const siteDesc = org.description || "O melhor sabor da região no seu celular. Peça agora!";
-                    const logoUrl = org.branding?.logoUrl || org.branding?.logo || `https://${host}/logo.png?v=5`;
+                    const logoUrl = org.branding?.logoUrl || org.branding?.logo || `https://${host}/logo.png?v=8`;
                     html = html
+                        // Primary Tags
                         .replace(/<title>.*?<\/title>/g, `<title>${siteName}</title>`)
                         .replace(/<meta name="title" content=".*?" ?\/?>/g, `<meta name="title" content="${siteName}" />`)
                         .replace(/<meta name="description" content=".*?" ?\/?>/g, `<meta name="description" content="${siteDesc}" />`)
+                        // Open Graph Image (WhatsApp/Facebook)
                         .replace(/<meta property="og:title" content=".*?" ?\/?>/g, `<meta property="og:title" content="${siteName}" />`)
                         .replace(/<meta property="og:description" content=".*?" ?\/?>/g, `<meta property="og:description" content="${siteDesc}" />`)
                         .replace(/<meta property="og:image" content=".*?" ?\/?>/g, `<meta property="og:image" content="${logoUrl}" />`)
+                        .replace(/<meta property="og:image:secure_url" content=".*?" ?\/?>/g, `<meta property="og:image:secure_url" content="${logoUrl}" />`)
                         .replace(/<meta property="og:url" content=".*?" ?\/?>/g, `<meta property="og:url" content="https://${host}${req.url}" />`)
+                        // Twitter & Google/Social Discovery
                         .replace(/<meta property="twitter:title" content=".*?" ?\/?>/g, `<meta property="twitter:title" content="${siteName}" />`)
                         .replace(/<meta property="twitter:description" content=".*?" ?\/?>/g, `<meta property="twitter:description" content="${siteDesc}" />`)
-                        .replace(/<meta property="twitter:image" content=".*?" ?\/?>/g, `<meta property="twitter:image" content="${logoUrl}" />`);
+                        .replace(/<meta property="twitter:image" content=".*?" ?\/?>/g, `<meta property="twitter:image" content="${logoUrl}" />`)
+                        .replace(/<meta itemprop="image" content=".*?" ?\/?>/g, `<meta itemprop="image" content="${logoUrl}" />`)
+                        // Hidden image crawler fallback
+                        .replace(/<img src=".*?" alt="Logo Sharing" ?\/?>/g, `<img src="${logoUrl}" alt="Logo Sharing" />`);
                 }
                 res.send(html);
             }
