@@ -41,7 +41,7 @@ export const SaaSLayout: React.FC<SaaSLayoutProps> = ({ children, activeTab, set
   };
 
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'dashboard', label: 'Visão Geral', icon: LayoutDashboard },
     { id: 'companies', label: 'Empresas', icon: Store },
     { id: 'financial', label: 'Financeiro', icon: CreditCard },
     { id: 'plans', label: 'Planos SaaS', icon: Layers },

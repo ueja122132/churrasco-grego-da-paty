@@ -20,7 +20,9 @@ import {
   Copy,
   Trophy,
   Star,
-  MapPin
+  MapPin,
+  FileText,
+  CircleDollarSign
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../context/AuthContext";
@@ -58,6 +60,7 @@ export const SalesPage = () => {
 
 
 
+
   const [isOrdering, setIsOrdering] = useState(false);
   const [needsLogin, setNeedsLogin] = useState(false);
   const [isShopOpen, setIsShopOpen] = useState(true);
@@ -68,6 +71,8 @@ export const SalesPage = () => {
   const [availableExtras, setAvailableExtras] = useState<ExtraIngredient[]>([]);
   const [selectedExtras, setSelectedExtras] = useState<ExtraIngredient[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'pix' | 'delivery'>('pix');
+  const [deliveryMethod, setDeliveryMethod] = useState<'cash' | 'pix_delivery'>('cash');
+  const [changeAmount, setChangeAmount] = useState("");
 
   // Payment Modal State
   const [showPayment, setShowPayment] = useState(false);
@@ -86,6 +91,15 @@ export const SalesPage = () => {
   const [guestLocation, setGuestLocation] = useState<{lat: number, lng: number, address: string} | null>(
     localStorage.getItem('guest_location') ? JSON.parse(localStorage.getItem('guest_location')!) : null
   );
+
+  useEffect(() => {
+    localStorage.setItem('guest_name', guestName);
+  }, [guestName]);
+
+  useEffect(() => {
+    localStorage.setItem('guest_phone', guestPhone);
+  }, [guestPhone]);
+
   const [showLocationExplainer, setShowLocationExplainer] = useState(false);
   const [isCapturingLocation, setIsCapturingLocation] = useState(false);
   
@@ -243,48 +257,87 @@ export const SalesPage = () => {
     lastOrderRef.current = lastOrder;
   }, [lastOrder]);
 
-  // Reliable listener for closing modal on automatic PIX confirmation
+  // Reliable real-time listener for status and payment updates
   useEffect(() => {
-    const onPaymentUpdate = ({ id, payment_status }: { id: number, payment_status: string }) => {
-      const currentWaiting = lastOrderRef.current;
-      console.log(`[SalesPage] Received global signal for Order ${id}, status: ${payment_status}. Currently waiting for: ${currentWaiting?.id}`);
+    if (!org?.id) return;
 
-      if (currentWaiting && Number(currentWaiting.id) === Number(id) && payment_status === 'paid') {
-        setShowPayment(false);
-        setPixData(null);
-        setLastOrder(null);
-        setCart([]); // Clear cart ONLY here for Pix
-        setActiveOrders(prev => {
-          if (prev.some(o => o.id === currentWaiting.id)) {
-            return prev.map(o => o.id === currentWaiting.id ? { ...currentWaiting, payment_status: 'paid' as any } : o);
+    if (!socket.connected) socket.connect();
+    socket.emit("join:org", org.id);
+
+    const handleStatusUpdate = (updatedOrder: Order) => {
+      console.log("[SalesPage] Status update received:", updatedOrder.id, updatedOrder.status);
+      if (updatedOrder.org_id?.toString() !== org.id.toString()) return;
+
+      setActiveOrders(prev => {
+        // If order finished/cancelled, remove from active list
+        if (['delivered', 'cancelled'].includes(updatedOrder.status)) {
+          if (updatedOrder.status === 'delivered') {
+            const lastId = localStorage.getItem('last_order_id');
+            if (lastId && Number(updatedOrder.id) === Number(lastId) && !updatedOrder.rating) {
+              setActiveFeedbackOrder(updatedOrder);
+              setShowFeedbackModal(true);
+            }
           }
-          return [...prev, { ...currentWaiting, payment_status: 'paid' as any }];
-        });
-        notify("Pagamento confirmado, seu pedido já está no fogo! 🔥", "success");
+          return prev.filter(o => o.id !== updatedOrder.id);
+        }
+
+        // Update existing or add if missing
+        const index = prev.findIndex(o => o.id === updatedOrder.id);
+        if (index === -1) {
+          return [updatedOrder, ...prev].sort((a, b) => b.id - a.id);
+        }
+        const next = [...prev];
+        next[index] = updatedOrder;
+        return next;
+      });
+
+      if (lastOrderRef.current?.id === updatedOrder.id) {
+        setLastOrder(updatedOrder);
       }
     };
 
-    const onStatusUpdate = (updatedOrder: Order) => {
-      console.log("[SalesPage] Status update received for Order", updatedOrder.id, " New Status:", updatedOrder.status);
+    const handlePaymentUpdate = ({ id, payment_status }: { id: number, payment_status: string }) => {
+      console.log("[SalesPage] Payment update received:", id, payment_status);
       
-      setActiveOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+      setActiveOrders(prev => {
+        const index = prev.findIndex(o => o.id === id);
+        if (index === -1) return prev;
+        const next = [...prev];
+        next[index] = { ...next[index], payment_status: payment_status as any };
+        return next;
+      });
 
-      if (updatedOrder.status === 'delivered') {
-        const lastId = localStorage.getItem('last_order_id');
-        if (lastId && Number(updatedOrder.id) === Number(lastId)) {
-          setActiveFeedbackOrder(updatedOrder);
-          setShowFeedbackModal(true);
+      if (lastOrderRef.current?.id === id && payment_status === 'paid') {
+        setShowPayment(false);
+        setPixData(null);
+        setCart([]);
+        notify("Seu pagamento foi confirmado! O fogo já acendeu na cozinha. 🍢🔥", "success");
+      }
+    };
+
+    const handleNewOrder = (newOrder: Order) => {
+      if (newOrder.org_id?.toString() === org.id.toString()) {
+        const storedPhone = localStorage.getItem('guest_phone');
+        // If it belongs to this session user/guest, add to active list
+        if ((newOrder as any).user_id === user?.id || newOrder.customer_phone === storedPhone) {
+          setActiveOrders(prev => {
+            if (prev.some(o => o.id === newOrder.id)) return prev;
+            return [newOrder, ...prev];
+          });
         }
       }
     };
 
-    socket.on("order:payment_update", onPaymentUpdate);
-    socket.on("order:status_update", onStatusUpdate);
+    socket.on("order:status_update", handleStatusUpdate);
+    socket.on("order:payment_update", handlePaymentUpdate);
+    socket.on("order:new", handleNewOrder);
+
     return () => {
-      socket.off("order:payment_update", onPaymentUpdate);
-      socket.off("order:status_update", onStatusUpdate);
+      socket.off("order:status_update", handleStatusUpdate);
+      socket.off("order:payment_update", handlePaymentUpdate);
+      socket.off("order:new", handleNewOrder);
     };
-  }, []); // Mount only! Uses ref for closure-safe state access
+  }, [org?.id, user?.id, notify]);
 
   // Fallback Polling for PIX Payment
   useEffect(() => {
@@ -298,7 +351,7 @@ export const SalesPage = () => {
             setPixData(null);
             setLastOrder(null);
             setCart([]); // Clear cart ONLY here for Pix
-            notify("Pagamento confirmado, volte sempre!", "success");
+            notify("Pagamento Aprovado! Seu Churrasco Grego já está sendo preparado com todo carinho. 🍢✅❤️", "success");
             clearInterval(interval);
           }
         })
@@ -371,6 +424,7 @@ export const SalesPage = () => {
       } as any];
     });
     setSelectedProduct(null);
+    notify("Item adicionado ao carrinho! 🍢✅", "success");
   };
 
   const removeFromCart = (index: number) => {
@@ -430,7 +484,13 @@ export const SalesPage = () => {
           address: guestLocation.address,
           latitude: guestLocation.lat,
           longitude: guestLocation.lng,
-          payment_method: paymentMethod
+          payment_method: paymentMethod === 'delivery' ? `delivery_${deliveryMethod}` : 'pix',
+          cash_change_requested: (deliveryMethod === 'cash' && changeAmount) 
+            ? parseFloat(changeAmount.replace(',', '.')) 
+            : null,
+          notes: deliveryMethod === 'cash' && changeAmount 
+            ? `Precisa de troco para R$ ${changeAmount}. ${guestLocation.address}`
+            : guestLocation.address
         })
       });
       
@@ -453,7 +513,7 @@ export const SalesPage = () => {
 
       if (paymentMethod === 'delivery') {
         setIsOrdering(false);
-        notify("Pedido realizado com sucesso! Acompanhe o status aqui na tela.", "success");
+        notify("Oba! Pedido recebido. Agora é com a gente! Fica de olho aqui pra ver quando sair pra entrega. 🍢🔥", "success");
         return;
       }
 
@@ -549,7 +609,7 @@ export const SalesPage = () => {
       setShowPayment(false);
       setPixData(null);
       setCart([]); // Manual confirm clears cart
-      notify("Pagamento confirmado! Seu pedido já está na cozinha. 🍢", "success");
+      notify("Pagamento Aprovado! Seu Churrasco Grego já está sendo preparado com todo carinho. 🍢✅❤️", "success");
     } catch (err) {
       console.error(err);
     }
@@ -978,12 +1038,74 @@ export const SalesPage = () => {
                     <Truck size={20} />
                   </div>
                   <span className="text-[11px] font-black uppercase tracking-tighter italic">Na Entrega</span>
-                  <span className="text-[9px] font-bold opacity-60">PIX ou Dinheiro</span>
+                  <span className="text-[9px] font-bold opacity-60">Dinheiro ou PIX</span>
                   {paymentMethod === 'delivery' && (
                     <motion.div layoutId="payActive" className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full" />
                   )}
                 </button>
               </div>
+
+              {/* Sub-opções para Entrega */}
+              <AnimatePresence>
+                {paymentMethod === 'delivery' && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="space-y-3 overflow-hidden"
+                  >
+                    <div className="grid grid-cols-2 gap-2">
+                       <button
+                         type="button"
+                         onClick={() => setDeliveryMethod('cash')}
+                         className={cn(
+                           "py-3 rounded-2xl border-2 text-[10px] font-black uppercase tracking-widest transition-all",
+                           deliveryMethod === 'cash' ? "border-orange-500 bg-orange-50 text-orange-700" : "border-gray-100 text-gray-400"
+                         )}
+                       >
+                         💵 Dinheiro
+                       </button>
+                       <button
+                         type="button"
+                         onClick={() => setDeliveryMethod('pix_delivery')}
+                         className={cn(
+                           "py-3 rounded-2xl border-2 text-[10px] font-black uppercase tracking-widest transition-all",
+                           deliveryMethod === 'pix_delivery' ? "border-orange-500 bg-orange-50 text-orange-700" : "border-gray-100 text-gray-400"
+                         )}
+                       >
+                         📱 PIX na Entrega
+                       </button>
+                    </div>
+                    
+                    {deliveryMethod === 'cash' && (
+                      <motion.div 
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="bg-orange-50/50 p-4 rounded-2xl border-2 border-orange-100"
+                      >
+                         {org?.accepts_cash_change !== false ? (
+                           <>
+                             <label className="text-[9px] font-black uppercase text-orange-600 tracking-widest mb-1.5 block">Precisa de troco para quanto?</label>
+                             <input 
+                               type="text" 
+                               placeholder="Ex: 50,00"
+                               value={changeAmount}
+                               onChange={(e) => setChangeAmount(e.target.value)}
+                               className="w-full bg-white border-2 border-orange-200 rounded-xl p-3 text-sm font-bold focus:border-orange-500 outline-none transition-all placeholder:text-gray-300"
+                             />
+                             <p className="text-[9px] text-gray-400 mt-2 italic font-medium">Deixe em branco se não precisar de troco.</p>
+                           </>
+                         ) : (
+                           <div className="flex items-center gap-2 text-orange-600">
+                             <AlertCircle size={16} />
+                             <p className="text-[10px] font-black uppercase tracking-widest">Estamos sem troco no momento.</p>
+                           </div>
+                         )}
+                      </motion.div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
             <button
@@ -1012,13 +1134,108 @@ export const SalesPage = () => {
                   className="mt-6 pt-6 border-t border-gray-100 space-y-4"
                 >
                   <div className="bg-orange-50/50 border-2 border-orange-100 shadow-sm rounded-3xl p-5 overflow-hidden relative">
-                    <div className={cn(
-                      "absolute top-0 left-0 h-1 bg-orange-500 transition-all duration-1000",
-                      order.status === 'pending' ? 'w-[20%]' : 
-                      order.status === 'preparing' ? 'w-[50%]' :
-                      order.status === 'ready' ? 'w-[80%]' : 'w-full'
-                    )} />
-                    
+                    {/* NOVA LINHA DO TEMPO (STYLE PREMIUM) */}
+                    <div className="relative pt-4 pb-8">
+                       {/* Linha de fundo */}
+                       <div className="absolute top-[4.5rem] left-0 w-full h-1 bg-gray-100 rounded-full" />
+                       
+                       {/* Linha de progresso ativa */}
+                       <div 
+                          className={cn(
+                            "absolute top-[4.5rem] left-0 h-1 bg-orange-500 rounded-full transition-all duration-1000 origin-left",
+                            order.status === 'delivered' ? 'w-full' : 
+                            order.status === 'shipped' ? 'w-[75%]' : 
+                            order.status === 'ready' || order.status === 'preparing' ? 'w-1/2' : 
+                            (order.payment_status === 'paid' || (order.payment_method || '').includes('delivery')) ? 'w-1/4' : 'w-0'
+                          )}
+                          aria-label={`Progresso do pedido: ${order.status}`}
+                        />
+
+                       <div className="flex justify-between relative z-10">
+                          {/* PASSO 1: PEDIDO */}
+                          <div className="flex flex-col items-center gap-2 group/step w-1/5">
+                             <div className="w-10 h-10 rounded-full bg-orange-600 text-white flex items-center justify-center shadow-lg shadow-orange-100 transition-all">
+                                <FileText size={18} />
+                             </div>
+                             <span className="text-[9px] font-black uppercase text-orange-600 text-center leading-tight">Pedido<br/>Recebido</span>
+                          </div>
+
+                          {/* PASSO 2: PAGAMENTO */}
+                          <div className="flex flex-col items-center gap-2 group/step w-1/5">
+                             <div className={cn(
+                               "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500",
+                               (order.payment_status === 'paid' || (order.payment_method || '').includes('delivery'))
+                                ? "bg-orange-600 text-white shadow-lg shadow-orange-100"
+                                : "bg-white text-gray-300 border-2 border-gray-100"
+                             )}>
+                                {(order.payment_method || '').includes('delivery') 
+                                  ? <CircleDollarSign size={18} /> 
+                                  : <CreditCard size={18} />}
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase text-center leading-tight",
+                               (order.payment_status === 'paid' || (order.payment_method || '').includes('delivery')) ? "text-orange-600" : "text-gray-300"
+                             )}>
+                               {(order.payment_method || '').includes('delivery') ? "Pagar na\nEntrega" : "Pagamento\nConfirmado"}
+                             </span>
+                          </div>
+
+                          {/* PASSO 3: COZINHA */}
+                          <div className="flex flex-col items-center gap-2 group/step w-1/5">
+                             <div className={cn(
+                               "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500",
+                               ['preparing', 'ready', 'shipped', 'delivered'].includes(order.status)
+                                ? "bg-orange-600 text-white shadow-lg shadow-orange-100"
+                                : "bg-white text-gray-300 border-2 border-gray-100"
+                             )}>
+                                <UtensilsCrossed size={18} className={cn(['preparing', 'ready'].includes(order.status) && "animate-pulse")} />
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase text-center leading-tight",
+                               ['preparing', 'ready', 'shipped', 'delivered'].includes(order.status) ? "text-orange-600" : "text-gray-300"
+                             )}>
+                               No Fogo<br/>(Cozinha)
+                             </span>
+                          </div>
+
+                          {/* PASSO 4: ROTA */}
+                          <div className="flex flex-col items-center gap-2 group/step w-1/5">
+                             <div className={cn(
+                               "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500",
+                               ['shipped', 'delivered'].includes(order.status)
+                                ? "bg-orange-600 text-white shadow-lg shadow-orange-100"
+                                : "bg-white text-gray-300 border-2 border-gray-100"
+                             )}>
+                                <Truck size={18} className={cn(order.status === 'shipped' && "animate-bounce")} />
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase text-center leading-tight",
+                               ['shipped', 'delivered'].includes(order.status) ? "text-orange-600" : "text-gray-300"
+                             )}>
+                               Saiu para<br/>Entrega
+                             </span>
+                          </div>
+
+                          {/* PASSO 5: ENTREGUE */}
+                          <div className="flex flex-col items-center gap-2 group/step w-1/5">
+                             <div className={cn(
+                               "w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500",
+                               order.status === 'delivered'
+                                ? "bg-green-600 text-white shadow-lg shadow-green-100"
+                                : "bg-white text-gray-300 border-2 border-gray-100"
+                             )}>
+                                <Star size={18} />
+                             </div>
+                             <span className={cn(
+                               "text-[9px] font-black uppercase text-center leading-tight",
+                               order.status === 'delivered' ? "text-green-600" : "text-gray-300"
+                             )}>
+                               Chegou!<br/>Sucesso
+                             </span>
+                          </div>
+                       </div>
+                    </div>
+
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-white rounded-2xl flex items-center justify-center shrink-0 shadow-sm">
                         {order.status === 'pending' && <Clock className="text-orange-600" size={20} />}
@@ -1239,7 +1456,7 @@ export const SalesPage = () => {
                     )}
                     <div className="mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2">
                       <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                      <p className="text-xs text-amber-700 text-left">Seu pedido será confirmado automaticamente após o pagamento.</p>
+                      <p className="text-xs text-amber-700 text-left">Quase lá! Assim que você pagar, o fogo já acende na cozinha automaticamente! 🍢💳</p>
                     </div>
                   </div>
                 ) : (

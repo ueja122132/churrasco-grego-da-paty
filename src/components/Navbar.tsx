@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from "react-router-dom";
+import { SUPER_ADMIN_EMAIL } from '../App';
 import { 
   ShoppingBag, 
   ChefHat, 
@@ -49,7 +50,7 @@ export const Navbar = () => {
     { id: 'finance', label: 'Financeiro', icon: DollarSign, path: '/finance', show: isAdmin },
     { id: 'settings', label: 'Painel', icon: Settings, path: '/admin', show: isAdmin },
     { id: 'courier', label: isCourier ? 'Entregas' : 'Modo Entregador', icon: Bike, path: '/courier', show: isCourier || isAdmin },
-    { id: 'saas', label: 'SaaS Admin', icon: ShieldCheck, path: '/saas', show: user?.role === 'super_admin' },
+    { id: 'saas', label: 'SaaS Admin', icon: ShieldCheck, path: '/saas', show: user?.role === 'super_admin' && user?.email === SUPER_ADMIN_EMAIL },
   ];
 
   return (

@@ -44,12 +44,33 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
   const [pixLoading, setPixLoading] = useState(false);
   
   const watchId = React.useRef<number | null>(null);
+  const [amountReceived, setAmountReceived] = useState<string>('');
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [user.id]);
+
+  // Real-time connection to Org Room for Deliveries
+  useEffect(() => {
+    if (!org?.id) return;
+    if (!socket.connected) socket.connect();
+    socket.emit("join:org", org.id);
+
+    // Refresh when something changes related to orders
+    const handleUpdate = () => fetchData();
+    
+    socket.on("order:status_update", handleUpdate);
+    socket.on("order:new", handleUpdate);
+    socket.on("order:payment_update", handleUpdate);
+
+    return () => {
+      socket.off("order:status_update", handleUpdate);
+      socket.off("order:new", handleUpdate);
+      socket.off("order:payment_update", handleUpdate);
+    };
+  }, [org?.id]);
 
   const fetchData = async () => {
     try {
@@ -140,6 +161,7 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
     });
     await updateOrderStatus(order.id, 'delivered');
     setShowQrModal(null);
+    setAmountReceived('');
   };
 
   useEffect(() => {
@@ -160,8 +182,8 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
     return () => clearInterval(interval);
   }, [showQrModal]);
 
-  const pendingOrders = allOrders.filter(o => o.status === 'ready' || o.status === 'shipped');
-  const completedOrders = allOrders.filter(o => o.status === 'delivered');
+  const pendingOrders = allOrders.filter(o => o.status === 'ready' || o.status === 'shipped' || o.status === 'preparing' || o.status === 'pending');
+  const completedOrders = allOrders.filter(o => o.status === 'delivered' || o.status === 'cancelled');
 
   if (loading) return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -186,7 +208,7 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
               </div>
             </div>
             <div>
-              <h1 className="text-2xl font-black italic tracking-tighter bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">COURIER PRO</h1>
+              <h1 className="text-2xl font-black italic tracking-tighter bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">ENTREGADOR PRO</h1>
               <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{user?.name || 'Motorista Parceiro'}</p>
             </div>
           </div>
@@ -328,10 +350,15 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
                         </p>
                       </div>
                       <p className="text-2xl font-black italic tracking-tighter">ORD-{order.id.toString().padStart(4, '0')}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
                          <span className="text-[10px] font-black text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded uppercase tracking-widest">
                             {order.status === 'delivered' ? 'RECEBIDO: ' : 'VOCÊ GANHA: '} R$ {parseFloat(order.delivery_fee || 0).toFixed(2)}
                          </span>
+                         {order.cash_change_requested && (
+                           <span className="text-[10px] font-black text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded uppercase tracking-widest border border-orange-500/20">
+                             Troco p/ R$ {order.cash_change_requested.toFixed(2)}
+                           </span>
+                         )}
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-2">
@@ -341,7 +368,7 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
                          order.status === 'delivered' ? "bg-emerald-500/10 text-emerald-500" :
                          "bg-orange-500/10 text-orange-500 border border-orange-500/20"
                        )}>
-                         {order.status === 'delivered' ? 'Entregue' : order.status === 'shipped' ? 'Em Rota' : 'Retirada'}
+                         {order.status === 'delivered' ? 'Entregue' : order.status === 'shipped' ? 'Em Rota' : 'Pendente'}
                        </div>
                        <div className={cn(
                          "px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-tighter",
@@ -389,48 +416,64 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
                     </div>
                   </div>
 
-                  <div className="flex gap-4">
-                    {order.status === 'ready' && (
-                      <button 
-                        onClick={() => updateOrderStatus(order.id, 'shipped')}
-                        className="flex-1 py-5 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-orange-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                  <div className="flex flex-col gap-3">
+                    <div className="flex gap-4">
+                      {order.status === 'ready' && (
+                        <button 
+                          onClick={() => updateOrderStatus(order.id, 'shipped')}
+                          className="flex-1 py-5 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-orange-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                        >
+                          Confirmar Retirada
+                        </button>
+                      )}
+
+                      {order.status === 'shipped' && (
+                        <>
+                          {order.payment_status === 'paid' ? (
+                            <button 
+                              onClick={() => updateOrderStatus(order.id, 'delivered')}
+                              className="flex-1 py-5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                            >
+                              <CheckCircle2 size={20} /> Finalizar Entrega
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={() => generatePixAndShow(order)}
+                              className="flex-1 py-5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-blue-500/20 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                            >
+                              <QrCode size={20} /> Cobrar Pedido
+                            </button>
+                          )}
+                        </>
+                      )}
+                      
+                      <a 
+                        href={order.latitude && order.longitude 
+                          ? `https://www.google.com/maps/dir/?api=1&destination=${order.latitude},${order.longitude}` 
+                          : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(order.address || "")}`
+                        }
+                        target="_blank"
+                        rel="noreferrer"
+                        className="w-16 h-16 bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center hover:bg-white/10 transition-all shadow-lg"
+                        title="Abrir no GPS"
                       >
-                        Confirmar Retirada
+                         <Navigation size={24} className="text-blue-500" />
+                      </a>
+                    </div>
+
+                    {/* Só mostra cancelar se não estiver entregue nem cancelado */}
+                    {!['delivered', 'cancelled'].includes(order.status) && (
+                      <button 
+                        onClick={() => {
+                          if (window.confirm("CONFIRMAR CANCELAMENTO: Este pedido foi recusado ou é um erro?")) {
+                            updateOrderStatus(order.id, 'cancelled');
+                          }
+                        }}
+                        className="w-full py-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-red-500/20 transition-all"
+                      >
+                        Recusado / Cancelar Pedido ❌
                       </button>
                     )}
-
-                    {order.status === 'shipped' && (
-                      <>
-                        {order.payment_status === 'paid' ? (
-                          <button 
-                            onClick={() => updateOrderStatus(order.id, 'delivered')}
-                            className="flex-1 py-5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-emerald-500/20 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                          >
-                            <CheckCircle2 size={20} /> Finalizar Entrega
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={() => generatePixAndShow(order)}
-                            className="flex-1 py-5 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-2xl font-black uppercase tracking-[0.2em] text-xs shadow-xl shadow-blue-500/20 flex items-center justify-center gap-3 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                          >
-                            <QrCode size={20} /> Cobrar Pedido
-                          </button>
-                        )}
-                      </>
-                    )}
-                    
-                    <a 
-                      href={order.latitude && order.longitude 
-                        ? `https://www.google.com/maps?q=${order.latitude},${order.longitude}`
-                        : `https://maps.google.com/?q=${encodeURIComponent(order.address || '')}`
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      aria-label="Abrir no Google Maps"
-                      className="w-16 py-5 bg-white/5 hover:bg-white/10 text-slate-400 border border-white/10 rounded-2xl flex items-center justify-center transition-all"
-                    >
-                      <Navigation size={22} />
-                    </a>
                   </div>
                 </div>
               </motion.div>
@@ -521,11 +564,62 @@ export const CourierDashboard: React.FC<CourierDashboardProps> = ({ user, notify
               </div>
 
               <div className="space-y-4">
+                <div className="bg-white/5 rounded-2xl p-4 border border-white/5">
+                  <div className="flex justify-between items-center mb-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Calculadora de Troco</p>
+                    {showQrModal.cash_change_requested && (
+                      <span className="text-[9px] font-black text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded">
+                        Pedido p/ R$ {showQrModal.cash_change_requested.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[9px] font-black text-slate-600 uppercase mb-1 block">Valor Recebido (Dinheiro)</label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs font-black text-slate-500">R$</span>
+                        <input 
+                          type="text"
+                          inputMode="decimal"
+                          placeholder="0,00"
+                          value={amountReceived}
+                          onChange={(e) => setAmountReceived(e.target.value.replace(',', '.'))}
+                          className="w-full bg-[#020617] border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm font-bold text-white focus:border-emerald-500 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {amountReceived && parseFloat(amountReceived) > 0 && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: -5 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={cn(
+                          "p-3 rounded-xl flex justify-between items-center",
+                          parseFloat(amountReceived) >= showQrModal.total_price 
+                            ? "bg-emerald-500/10 border border-emerald-500/20" 
+                            : "bg-red-500/10 border border-red-500/20"
+                        )}
+                      >
+                        <span className="text-[10px] font-black uppercase text-slate-400">
+                          {parseFloat(amountReceived) >= showQrModal.total_price ? "Troco a devolver" : "Falta receber"}
+                        </span>
+                        <span className={cn(
+                          "text-lg font-black italic",
+                          (parseFloat(amountReceived) || 0) >= showQrModal.total_price ? "text-emerald-400" : "text-red-400"
+                        )}>
+                          R$ {Math.abs((parseFloat(amountReceived) || 0) - showQrModal.total_price).toFixed(2)}
+                        </span>
+                      </motion.div>
+                    )}
+                  </div>
+                </div>
+
                 <button
                   onClick={() => confirmPaidManually(showQrModal)}
                   className="w-full py-5 bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-500 border border-white/10 hover:border-emerald-500/20 text-slate-300 font-black uppercase text-xs tracking-widest rounded-2xl flex items-center justify-center gap-3 transition-all"
                 >
-                  <Banknote size={20} /> Recebi em Dinheiro
+                  <Banknote size={20} /> Confirmar Recebimento
                 </button>
                 
                 <div className="pt-2 text-center">

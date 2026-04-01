@@ -63,7 +63,12 @@ function setCachedData(key: string, data: any) {
 function invalidateOrgCache(orgId: string) {
   apiCache.delete(`products:${orgId}`);
   apiCache.delete(`extras:${orgId}`);
-  // We don't delete 'detect' because it's usually based on hostname or slug which rarely change
+  // Invalida também o cache de detecção, pois o conteúdo da org mudou (ex: aceites, logos, etc)
+  for (const key of apiCache.keys()) {
+    if (key.startsWith('detect:') && (key.includes(orgId) || key.includes('localhost'))) {
+       apiCache.delete(key);
+    }
+  }
 }
 
 // Password Hashing Utility
@@ -229,9 +234,11 @@ async function startServer() {
   });
 
 
-  // ==========================================
-  // MIDDLEWARES DE PROTEÇÃO SAAS
-  // ==========================================
+  // ============================================================
+  // SECTION: MIDDLEWARES DE PROTEÇÃO SAAS (BILLING & AUTH)
+  // ============================================================
+  // Este bloco gerencia quem pode acessar o quê e se as faturas estão em dia.
+  // IMPORTANTE: Devido ao tamanho do arquivo, mantenha as rotas abaixo destas definições.
 
   const billingCache = new Map<string, { data: any, timestamp: number }>();
 
@@ -268,8 +275,9 @@ async function startServer() {
     const status = org.subscription_status || org.status || 'active';
     const dueDate = org.next_billing_date || org.billing_due_date;
     const exempt = org.is_exempt || org.billing_exempt || false;
-
+    // Lógica de Isenção: Aceita tanto is_exempt quanto billing_exempt para compatibilidade legada
     if (exempt) return next();
+    
     if (status === 'suspended' || status === 'past_due' || status === 'inactive') {
       return res.status(402).json({ error: "Assinatura Pendente ou Loja Suspensa", code: "BILLING_BLOCKED" });
     }
@@ -284,6 +292,7 @@ async function startServer() {
     next();
   }
 
+  // Middleware para rotas exclusivas do Super Administrador (Plataforma)
   const superAdminGuard = async (req: any, res: any, next: any) => {
     const authHeader = req.headers.authorization;
     const customAdminId = req.headers['x-super-admin-id'];
@@ -678,6 +687,28 @@ async function startServer() {
     } catch (err: any) {
       console.error("[EXEMPTION_FATAL]", err);
       res.status(500).json({ error: "Erro interno ao alternar isenção" });
+    }
+  });
+
+  // Alterar configuração de troco da loja
+  app.patch("/api/organizations/:id/cash-settings", async (req: any, res: any) => {
+    const { id } = req.params;
+    const { accepts_cash_change } = req.body;
+    
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('organizations')
+        .update({ accepts_cash_change })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      invalidateOrgCache(id);
+      res.json({ success: true, org: data });
+    } catch (err: any) {
+      console.error("[CASH_SETTINGS_ERROR]", err.message);
+      res.status(500).json({ error: "Erro ao salvar configuração de troco" });
     }
   });
 
@@ -1953,9 +1984,15 @@ async function startServer() {
             const mpData = await mpRes.json();
 
             if (mpData.status === 'approved') {
-              await supabase.from('orders').update({ payment_status: 'paid', status: 'pending' }).eq('id', order.id);
-              io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
-              console.log(`[WEBHOOK] Order #${order.id} paid via MP`);
+              const { data: updatedOrder } = await supabase.from('orders').update({ payment_status: 'paid', status: 'pending' }).eq('id', order.id).select().single();
+              
+              const targetRoom = order.org_id.toString();
+              io.to(targetRoom).emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+              io.to(targetRoom).emit("order:status_update", { ...order, payment_status: 'paid', status: 'pending' });
+              // Emit order:new as well to ensure it appears in the kitchen if it was filtered out before
+              io.to(targetRoom).emit("order:new", { ...(updatedOrder || order), payment_status: 'paid', status: 'pending' });
+              
+              console.log(`[WEBHOOK] Order #${order.id} paid via MP and emitted to room ${targetRoom}`);
             }
           }
         } else {
@@ -2457,8 +2494,21 @@ async function startServer() {
     const cached = getCachedData(cacheKey);
     if (cached) return res.json(cached);
 
-    const { data } = await supabase.from('products').select('*').eq('org_id', req.params.orgId);
+    // Incluir ingredientes e itens de inventário vinculados para cálculo de CMV no frontend
+    const { data } = await supabase
+      .from('products')
+      .select('*, product_ingredients(*, inventory_items(*))')
+      .eq('org_id', req.params.orgId);
+      
     setCachedData(cacheKey, data);
+    res.json(data);
+  });
+
+  app.get("/api/:orgId/inventory", async (req, res) => {
+    const { data } = await supabase
+      .from('inventory_items')
+      .select('*')
+      .eq('org_id', req.params.orgId);
     res.json(data);
   });
 
@@ -2702,9 +2752,10 @@ async function startServer() {
         io.emit("user:points_update", { userId: user_id, points: currentPoints });
       }
 
-      // Emitir para a cozinha imediatamente (no monitor ele será filtrado se for Pix pendente)
-      console.log(`[SOCKET EMIT] NOVO PEDIDO: #${newOrder?.id} (${payment_method}) - Status: ${newOrder?.status}`);
-      io.emit("order:new", newOrder);
+      // Emitir para a sala da cozinha imediatamente
+      const targetRoom = req.params.orgId.toString();
+      console.log(`[SOCKET EMIT] NOVO PEDIDO: #${newOrder?.id} (${payment_method}) - Sala: ${targetRoom}`);
+      io.to(targetRoom).emit("order:new", newOrder);
       
       res.json(newOrder);
     } catch (err: any) {
@@ -2742,12 +2793,13 @@ async function startServer() {
             console.log(`[MANUAL SAFETY] Order #${order.id} is now PENDING. (Was ${oldStatus})`);
           }
 
-          io.emit("order:payment_update", { id: order.id, payment_status: 'paid' });
-          io.emit("order:status_update", { ...order, status: 'pending', payment_status: 'paid' }); // Avisar a vitrine
-          io.emit("order:new", { ...order, status: 'pending', payment_status: 'paid' });
+          const targetRoom = order.org_id.toString();
+          io.to(targetRoom).emit("order:payment_update", { id: order.id, payment_status: 'paid' });
+          io.to(targetRoom).emit("order:status_update", { ...order, status: 'pending', payment_status: 'paid' }); // Avisar a vitrine
+          io.to(targetRoom).emit("order:new", { ...order, status: 'pending', payment_status: 'paid' });
         }, 350);
-    } else if (payment_status) {
-      io.emit("order:payment_update", { id: parseInt(req.params.id), payment_status });
+    } else if (payment_status && order) {
+      io.to(order.org_id.toString()).emit("order:payment_update", { id: parseInt(req.params.id), payment_status });
     }
     
     res.json({ success: true });
@@ -2761,6 +2813,11 @@ async function startServer() {
     // 1. Get current order
     const { data: order, error: fetchErr } = await supabase.from('orders').select('*').eq('id', orderId).single();
     if (!order || fetchErr) return res.status(404).json({ error: "Pedido não encontrado." });
+
+    // Trava de segurança: Pedidos entregues não podem ser cancelados
+    if (order.status === 'delivered' && status === 'cancelled') {
+      return res.status(400).json({ error: "Não é possível cancelar um pedido que já foi entregue." });
+    }
 
     // 2. Prepare update payload
     const updatePayload: any = { status };
@@ -2776,25 +2833,69 @@ async function startServer() {
     if (updateErr) return res.status(500).json({ error: "Erro ao atualizar banco." });
 
     // 4. Points & Post-update logic (Pontos agora são dados na criação do pedido)
-    // 5. Emit updates
-    io.emit("order:update", { id: parseInt(orderId), status, courier_id });
-    io.emit("order:status_update", updatedOrder); // Canal novo para a vitrine e rastreio
-    if (status === 'delivered') io.emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
+    // 5. Emit updates to the specific org room
+    const targetRoom = updatedOrder?.org_id?.toString() || order.org_id?.toString();
+    if (targetRoom) {
+      io.to(targetRoom).emit("order:update", { id: parseInt(orderId), status, courier_id });
+      io.to(targetRoom).emit("order:status_update", updatedOrder); // Canal novo para a vitrine e rastreio
+      if (status === 'delivered') io.to(targetRoom).emit("order:payment_update", { id: parseInt(orderId), payment_status: 'paid' });
+    }
 
     res.json({ success: true, status: updatedOrder?.status });
   });
 
-  // Socket.io connection
+  // Socket.io connection - UNIFIED HANDLER
   io.on("connection", (socket) => {
-    console.log("A user connected");
+    console.log(`[SOCKET] Novo usuário conectado: ${socket.id}`);
+
+    // Join a specific organization room
+    socket.on("join:org", (orgId) => {
+      if (!orgId) return;
+      const room = orgId.toString();
+      socket.join(room);
+      console.log(`[SOCKET] Usuário ${socket.id} entrou na sala da Loja: ${room}`);
+    });
+
+    // Courier tracking room
+    socket.on('track:join', (data: { courierId: any }) => {
+      if (!data.courierId) return;
+      const room = `track:${data.courierId}`;
+      socket.join(room);
+      console.log(`[SOCKET] Cliente monitorando entregador: ${room}`);
+      
+      // Send last known location if available
+      const last = (global as any).courierLocations?.[data.courierId];
+      if (last) socket.emit('courier:location:update', last);
+    });
+
+    socket.on('track:leave', (data: { courierId: any }) => {
+      if (data.courierId) socket.leave(`track:${data.courierId}`);
+    });
+
+    // Courier sends their location
+    socket.on('courier:location', (data: { courierId: any, courierName: string, latitude: number, longitude: number, timestamp: number }) => {
+      if (!data.courierId) return;
+      io.to(`track:${data.courierId}`).emit('courier:location:update', data);
+      
+      (global as any).courierLocations = (global as any).courierLocations || {};
+      (global as any).courierLocations[data.courierId] = data;
+    });
+
+    socket.on('courier:location:stop', (data: { courierId: any }) => {
+      if (!data.courierId) return;
+      io.to(`track:${data.courierId}`).emit('courier:location:stopped', data);
+      if ((global as any).courierLocations) {
+        delete (global as any).courierLocations[data.courierId];
+      }
+    });
 
     socket.on("delivery:update_location", (data) => {
-      // data: { orderId: number, latitude: number, longitude: number }
+      // Legacy or internal delivery update
       io.emit(`delivery:location:${data.orderId}`, data);
     });
 
     socket.on("disconnect", () => {
-      console.log("User disconnected");
+      console.log(`[SOCKET] Usuário desconectado: ${socket.id}`);
     });
   });
 
@@ -2931,7 +3032,7 @@ Diretrizes:
       .single();
     if (error) return res.status(500).json({ error: error.message });
 
-    io.emit("order:update", { id: data.id, status: data.status, courier_id });
+    io.to(data.org_id.toString()).emit("order:update", { id: data.id, status: data.status, courier_id });
     res.json(data);
   });
 
@@ -3247,6 +3348,9 @@ Diretrizes:
     res.json({ success: true });
   });
 
+  // Mercado Pago balance logic moved to frontend as Estimated Revenue calculation
+  // to avoid 404 errors from non-public API endpoints.
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -3283,39 +3387,6 @@ Diretrizes:
     });
   });
 
-  // ===================================
-  // SOCKET.IO - GPS Rastreamento
-  // ===================================
-  io.on('connection', (sock) => {
-    // Courier sends their location
-    sock.on('courier:location', (data: { courierId: any, courierName: string, latitude: number, longitude: number, timestamp: number }) => {
-      // Broadcast to all clients in the courier's tracking room
-      io.to(`track:${data.courierId}`).emit('courier:location:update', data);
-      // Also store in a Map for new joiners
-      (global as any).courierLocations = (global as any).courierLocations || {};
-      (global as any).courierLocations[data.courierId] = data;
-    });
-
-    // Courier stops sharing
-    sock.on('courier:location:stop', (data: { courierId: any }) => {
-      io.to(`track:${data.courierId}`).emit('courier:location:stopped', data);
-      if ((global as any).courierLocations) {
-        delete (global as any).courierLocations[data.courierId];
-      }
-    });
-
-    // Client joins tracking room
-    sock.on('track:join', (data: { courierId: any }) => {
-      sock.join(`track:${data.courierId}`);
-      // Send last known location if available
-      const last = (global as any).courierLocations?.[data.courierId];
-      if (last) sock.emit('courier:location:update', last);
-    });
-
-    sock.on('track:leave', (data: { courierId: any }) => {
-      sock.leave(`track:${data.courierId}`);
-    });
-  });
 
   // Get last known courier location
   app.get('/api/courier/:courierId/location', (req, res) => {

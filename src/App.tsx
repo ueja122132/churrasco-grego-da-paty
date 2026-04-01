@@ -32,13 +32,16 @@ const LoadingScreen = () => (
   </div>
 );
 
+export const SUPER_ADMIN_EMAIL = 'ajeu.valverde@gmail.com';
+
 // Protected Route Wrapper
-const ProtectedRoute = ({ children, roles }: { children: React.ReactNode, roles?: string[] }) => {
+const ProtectedRoute = ({ children, roles, emails }: { children: React.ReactNode, roles?: string[], emails?: string[] }) => {
   const { user, loading } = useAuth();
   
   if (loading) return <LoadingScreen />;
   if (!user) return <Navigate to="/login" replace />;
   if (roles && !roles.includes(user.role || '')) return <Navigate to="/" replace />;
+  if (emails && !emails.includes(user.email || '')) return <Navigate to="/" replace />;
   
   return <>{children}</>;
 };
@@ -109,9 +112,8 @@ const AppContent = () => {
               </ProtectedRoute>
             } />
 
-            {/* Super Admin */}
             <Route path="/saas" element={
-              <ProtectedRoute roles={['super_admin']}>
+              <ProtectedRoute roles={['super_admin']} emails={[SUPER_ADMIN_EMAIL]}>
                 <SaaSAdminPage user={user} notify={notify} />
               </ProtectedRoute>
             } />
@@ -131,11 +133,10 @@ const AppContent = () => {
             } />
             <Route path="/:slug" element={<SalesPage />} />
 
-             {/* Fallback & Home */}
              <Route path="/" element={
-               user?.role === 'super_admin' ? <Navigate to="/saas" replace /> :
-               user?.role === 'courier' ? <Navigate to="/courier" replace /> :
                org ? <SalesPage /> : 
+               (user?.role === 'super_admin' && user?.email === SUPER_ADMIN_EMAIL) ? <Navigate to="/saas" replace /> :
+               user?.role === 'courier' ? <Navigate to="/courier" replace /> :
                <SubscribePage />
              } />
 

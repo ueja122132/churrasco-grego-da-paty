@@ -92,6 +92,7 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
     loadProducts();
 
     if (!socket.connected) socket.connect();
+    socket.emit("join:org", org.id);
 
     socket.on("order:new", (newOrder: Order) => {
       // Comparison with toString() to be safe with UUIDs/Strings/Numbers
@@ -367,12 +368,23 @@ export const KitchenPage: React.FC<{ notify: any }> = ({ notify }) => {
                     })}
                  </div>
 
-                 <div className="mt-8 pt-8 border-t-2 border-dashed border-gray-200">
+                 <div className="mt-8 pt-8 border-t-2 border-dashed border-gray-200 flex flex-col gap-4">
                     <button 
                       onClick={() => updateStatus(focusOrder.id, 'ready')}
                       className="w-full py-10 bg-green-600 text-white rounded-[3rem] text-4xl font-black uppercase italic tracking-tighter shadow-2xl shadow-green-200 flex items-center justify-center gap-6 hover:scale-[1.02] active:scale-[0.98] transition-all"
                     >
                       <CheckCircle2 size={48} /> FINALIZAR PEDIDO (PRONTO)
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        if (window.confirm("Deseja realmente CANCELAR este pedido? Isso avisará o cliente.")) {
+                          updateStatus(focusOrder.id, 'cancelled');
+                        }
+                      }}
+                      className="w-full py-6 bg-red-100 text-red-600 rounded-[2rem] text-2xl font-black uppercase italic tracking-tighter hover:bg-red-200 active:scale-95 transition-all flex items-center justify-center gap-4"
+                    >
+                      <X size={24} /> CANCELAR PEDIDO ❌
                     </button>
                  </div>
                </motion.div>

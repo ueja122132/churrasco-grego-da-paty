@@ -15,14 +15,20 @@ import {
   Layers,
   Trash2,
   Percent,
-  Edit2
+  Edit2, 
+  Shield, 
+  CheckCircle, 
+  QrCode, 
+  Truck, 
+  CreditCard
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useTenant } from "../context/TenantContext";
 import { useNotification } from "../context/NotificationContext";
-import { supabase } from "../supabase";
+import { supabase, socket } from "../supabase";
 import { Order, InventoryItem, Product, ProductIngredient } from "../types";
 import { cn } from "../lib/utils";
+import { translateStatus, translatePaymentMethod } from "../lib/statusUtils";
 
 // Utilitário: retorna a data local no formato YYYY-MM-DD (respeita fuso horário do dispositivo)
 // Usar toLocaleDateString('sv') é a forma correta — 'sv' (sueco) usa exatamente o padrão YYYY-MM-DD
@@ -40,6 +46,7 @@ export const FinancePage = () => {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<(Product & { ingredients: ProductIngredient[] })[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isConferenciaOpen, setIsConferenciaOpen] = useState(false);
 
   // Mercado Pago Fee State
   const [mpPixRate, setMpPixRate] = useState<number>(0.49); // 0.49% para PIX
@@ -62,12 +69,14 @@ export const FinancePage = () => {
   const [selectedInsumo, setSelectedInsumo] = useState<string>("");
   const [purchaseWeight, setPurchaseWeight] = useState("");
   const [purchasePrice, setPurchasePrice] = useState("");
+  const [purchasePaymentMethod, setPurchasePaymentMethod] = useState<'cash' | 'mercadopago'>('cash');
 
-  const [newMaterial, setNewMaterial] = useState({
-    name: "",
-    unit: "Kg",
-    category: "Carne",
-    initial_cost: ""
+  const [newMaterial, setNewMaterial] = useState({ 
+    name: "", 
+    unit: "Kg", 
+    category: "Proteína", 
+    initial_cost: "",
+    payment_method: 'cash' as 'cash' | 'mercadopago'
   });
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
 
@@ -75,7 +84,7 @@ export const FinancePage = () => {
   const [selectedPeriod, setSelectedPeriod] = useState<'today' | '7d' | 'month' | 'all'>('today');
   const [expenses, setExpenses] = useState<any[]>([]);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
-  const [newExpense, setNewExpense] = useState({ description: '', amount: '', category: 'Avulsa' });
+  const [newExpense, setNewExpense] = useState({ description: '', amount: '', category: 'Avulsa', payment_method: 'cash' });
 
   // Temp editing state to prevent focus loss and sync issues
   const [editingIngValues, setEditingIngValues] = useState<Record<string, string>>({});
@@ -141,13 +150,27 @@ export const FinancePage = () => {
         .eq('id', selectedInsumo);
 
       if (error) throw error;
-      notify("Preço de custo atualizado!", "success");
+
+      // AUTOMATIC EXPENSE INJECTION
+      const itemName = currentItem?.name || "Insumo";
+      await supabase.from('expenses').insert([{
+        description: `Compra de ${itemName}`,
+        amount: price,
+        category: 'Insumo',
+        payment_method: purchasePaymentMethod,
+        date: new Date().toISOString(),
+        org_id: org.id,
+        settled: true
+      }]);
+
+      notify("Compra e Despesa registradas!", "success");
       fetchData();
       setIsAddingPurchase(false);
       setPurchasePrice("");
       setPurchaseWeight("");
+      setPurchasePaymentMethod('cash');
     } catch (err: any) {
-      notify("Erro ao atualizar custo: " + err.message, "error");
+      notify("Erro ao processar: " + err.message, "error");
     }
   };
 
@@ -178,12 +201,33 @@ export const FinancePage = () => {
         }]);
 
         if (error) throw error;
-        notify("Material cadastrado!", "success");
+
+        // AUTOMATIC EXPENSE FOR NEW MATERIAL
+        const initialCost = parseFloat(newMaterial.initial_cost);
+        if (initialCost > 0) {
+          await supabase.from('expenses').insert([{
+            description: `Compra (Novo Insumo): ${newMaterial.name}`,
+            amount: initialCost,
+            category: 'Insumo',
+            payment_method: newMaterial.payment_method,
+            date: new Date().toISOString(),
+            org_id: org.id,
+            settled: true
+          }]);
+        }
+        
+        notify("Material cadastrado e despesa registrada!", "success");
       }
 
       setIsAddingNewMaterial(false);
       setEditingMaterialId(null);
-      setNewMaterial({ name: "", unit: "Kg", category: "Proteína", initial_cost: "" });
+      setNewMaterial({ 
+        name: "", 
+        unit: "Kg", 
+        category: "Proteína", 
+        initial_cost: "", 
+        payment_method: 'cash' 
+      });
       fetchData();
     } catch (err: any) {
       notify("Erro ao salvar: " + err.message, "error");
@@ -252,6 +296,30 @@ export const FinancePage = () => {
     }
   };
 
+  const handleCancelOrder = async (orderId: number) => {
+    if (!confirm("Deseja realmente cancelar este pedido? Se for duplicado, ele será excluído dos cálculos de lucro e faturamento.")) return;
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({ status: 'cancelled' })
+        .eq('id', orderId);
+        
+      if (error) throw error;
+      
+      // Notificar outros painéis via socket
+      socket.emit("order:update", { 
+        id: orderId, 
+        status: 'cancelled',
+        org_id: org?.id 
+      });
+      
+      notify("Pedido cancelado com sucesso!", "success");
+      fetchData(); // Atualiza os dados locais
+    } catch (err: any) {
+      notify("Erro ao cancelar: " + err.message, "error");
+    }
+  };
+
   // Calculations
   const formatCurrency = (v: number) => `R$ ${v.toFixed(2).replace('.', ',')}`;
   
@@ -290,6 +358,7 @@ export const FinancePage = () => {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     
     return orders.filter(o => {
+      if (o.status === 'cancelled') return false; // Excluir cancelados dos filtros globais do dashboard
       const orderDate = new Date(o.created_at).getTime();
       if (selectedPeriod === 'today') return orderDate >= today;
       if (selectedPeriod === '7d') return orderDate >= today - (7 * 24 * 60 * 60 * 1000);
@@ -329,9 +398,18 @@ export const FinancePage = () => {
       return acc;
     }, 0);
 
-    // Mercado Pago fees: PIX = mpPixRate%, Card/others = mpCardRate%
+    // Mercado Pago fees: apply to any PIX or Card payment (integrated)
     const mpFees = filteredOrders.reduce((acc, o) => {
-      const rate = (o.payment_method === 'pix' || o.payment_status === 'paid_pix') ? mpPixRate : mpCardRate;
+      const method = (o.payment_method || '').toLowerCase();
+      // Any PIX (integrated or courier)
+      const isPix = method.includes('pix') || o.payment_status === 'paid_pix';
+      // Any Card
+      const isCard = method.includes('card') || o.payment_status === 'paid_card';
+      
+      // If it's pure cash, fee is 0
+      if (!isPix && !isCard) return acc;
+      
+      const rate = isPix ? mpPixRate : mpCardRate;
       return acc + (o.total_price * (rate / 100));
     }, 0);
 
@@ -357,7 +435,7 @@ export const FinancePage = () => {
   const reportData = useMemo(() => {
     // Converte timestamp UTC do banco para data local (YYYY-MM-DD) antes de comparar
     // Isso evita que pedidos feitos após 21h (Brasília) apareçam no dia errado
-    const dayOrders = orders.filter(o => new Date(o.created_at).toLocaleDateString('sv') === selectedReportDate);
+    const dayOrders = orders.filter(o => o.status !== 'cancelled' && new Date(o.created_at).toLocaleDateString('sv') === selectedReportDate);
     const dayExpenses = expenses.filter(e => new Date(e.date || e.created_at).toLocaleDateString('sv') === selectedReportDate);
 
     const revenue = dayOrders.reduce((acc, o) => acc + o.total_price, 0);
@@ -373,7 +451,13 @@ export const FinancePage = () => {
       return acc;
     }, 0);
     const mpFees = dayOrders.reduce((acc, o) => {
-      const rate = (o.payment_method === 'pix' || o.payment_status === 'paid_pix') ? mpPixRate : mpCardRate;
+      const method = (o.payment_method || '').toLowerCase();
+      const isPix = method.includes('pix') || o.payment_status === 'paid_pix';
+      const isCard = method.includes('card') || o.payment_status === 'paid_card';
+      
+      if (!isPix && !isCard) return acc;
+      
+      const rate = isPix ? mpPixRate : mpCardRate;
       return acc + (o.total_price * (rate / 100));
     }, 0);
     const expTotal = dayExpenses.reduce((acc, e) => acc + (Number(e.amount) || 0), 0);
@@ -389,7 +473,10 @@ export const FinancePage = () => {
         const orderCmv = o.items.reduce((sc, item: any) => sc + (productCosts[item.id] || 0), 0);
         const orderGrossProfit = Math.max(0, o.total_price - orderCmv);
         const orderCourier = o.courier_id ? (orderGrossProfit * 0.18) : 0;
-        const orderMpFee = o.total_price * ((o.payment_method === 'pix' || o.payment_status === 'paid_pix' ? mpPixRate : mpCardRate) / 100);
+        const method = (o.payment_method || '').toLowerCase();
+        const isPix = method.includes('pix') || o.payment_status === 'paid_pix';
+        const isCard = method.includes('card') || o.payment_status === 'paid_card';
+        const orderMpFee = (!isPix && !isCard) ? 0 : o.total_price * ((isPix ? mpPixRate : mpCardRate) / 100);
         return {
           ...o,
           cmv: orderCmv,
@@ -433,6 +520,7 @@ export const FinancePage = () => {
         description: newExpense.description,
         amount: parseFloat(newExpense.amount),
         category: newExpense.category,
+        payment_method: newExpense.payment_method, // Added this field
         date: new Date().toISOString(),
         org_id: org.id,
         settled: true
@@ -440,7 +528,7 @@ export const FinancePage = () => {
       if (error) throw error;
       notify("Despesa registrada!", "success");
       setIsAddingExpense(false);
-      setNewExpense({ description: '', amount: '', category: 'Avulsa' });
+      setNewExpense({ description: '', amount: '', category: 'Avulsa', payment_method: 'cash' });
       fetchData();
     } catch (err: any) {
       notify("Erro ao salvar despesa: " + err.message, "error");
@@ -474,6 +562,39 @@ export const FinancePage = () => {
     return { totalCost, totalRevenue, profit: totalRevenue - totalCost };
   }, [simQuantities, products, productCosts]);
 
+  const conferenciaMetrics = useMemo(() => {
+    // Usar selectedReportDate (YYYY-MM-DD) para filtrar pedidos do dia selecionado
+    const dayOrders = orders.filter(o => o.status !== 'cancelled' && new Date(o.created_at).toLocaleDateString('sv') === selectedReportDate);
+    
+    const cashTotal = dayOrders.filter(o => o.payment_method === 'cash' || o.payment_method === 'delivery_cash').reduce((acc, o) => acc + o.total_price, 0);
+    const pixAutoTotal = dayOrders.filter(o => o.payment_method === 'pix' && !!o.mp_payment_id).reduce((acc, o) => acc + o.total_price, 0);
+    const pixDeliveryTotal = dayOrders.filter(o => o.payment_method === 'delivery_pix' || (o.payment_method === 'pix' && !o.mp_payment_id)).reduce((acc, o) => acc + o.total_price, 0);
+    
+    // Qualquer outro método que não seja Cash ou PIX (ex: Débito legado ou erro de cadastro)
+    const otherTotal = dayOrders.filter(o => 
+      !['cash', 'delivery_cash', 'pix', 'delivery_pix'].includes(o.payment_method || '')
+    ).reduce((acc, o) => acc + o.total_price, 0);
+
+    // O TOTAL GERAL deve ser a soma de TODOS os pedidos do dia para bater com o Dashboard
+    const total = dayOrders.reduce((acc, o) => acc + o.total_price, 0);
+
+    return {
+      cashTotal,
+      pixAutoTotal,
+      pixDeliveryTotal,
+      otherTotal,
+      total,
+      orders: dayOrders.map(o => {
+        const method = (o.payment_method || '').toLowerCase();
+        const isDigital = method.includes('pix') || method.includes('card');
+        return {
+          ...o,
+          isConfirmedMP: !!o.mp_payment_id && isDigital
+        };
+      })
+    };
+  }, [orders, selectedReportDate]);
+
   if (loading) return <div className="p-8 text-center text-gray-400">Carregando dados financeiros...</div>;
 
   return (
@@ -499,7 +620,7 @@ export const FinancePage = () => {
           onClick={() => setActiveTab('dashboard')}
           className={cn("px-6 py-3 rounded-2xl font-bold flex items-center gap-2 transition-all whitespace-nowrap", activeTab === 'dashboard' ? "bg-orange-600 text-white shadow-lg" : "bg-white text-gray-500")}
         >
-          <TrendingUp size={18} /> Dashboard
+          <TrendingUp size={18} /> Início
         </button>
         <button 
           onClick={() => setActiveTab('inventory')}
@@ -573,6 +694,13 @@ export const FinancePage = () => {
                    <Activity size={14} /> Reparar CMV
                  </button>
                )}
+
+               <button 
+                 onClick={() => setIsConferenciaOpen(true)}
+                 className="px-4 py-2 bg-green-50 text-green-600 rounded-xl text-xs font-black flex items-center gap-2 hover:bg-green-600 hover:text-white transition-all shadow-sm border border-green-100"
+               >
+                 <Calculator size={14} /> Conferência de Caixa
+               </button>
              </div>
            </div>
 
@@ -660,18 +788,38 @@ export const FinancePage = () => {
                       <tr>
                         <th className="px-6 py-3">Data</th>
                         <th className="px-6 py-3">Cliente</th>
+                        <th className="px-6 py-3">O que vendeu</th>
+                        <th className="px-6 py-3">Pagamento</th>
                         <th className="px-6 py-3 text-right">Valor</th>
+                        <th className="px-6 py-3 text-center">Ação</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
                       {filteredOrders.length === 0 ? (
-                        <tr><td colSpan={3} className="p-10 text-center text-gray-400 text-xs font-bold uppercase italic">Nenhuma venda encontrada</td></tr>
+                        <tr><td colSpan={4} className="p-10 text-center text-gray-400 text-xs font-bold uppercase italic">Nenhuma venda encontrada</td></tr>
                       ) : (
                         filteredOrders.slice().reverse().map(o => (
                           <tr key={o.id} className="hover:bg-gray-50/50 transition-colors">
                             <td className="px-6 py-4 text-[10px] text-gray-400">{new Date(o.created_at).toLocaleDateString()}</td>
                             <td className="px-6 py-4 font-bold text-gray-800 text-sm">{o.customer_name}</td>
+                            <td className="px-6 py-4 text-xs text-gray-500 max-w-[200px] truncate" title={o.items.map((i: any) => i.name).join(', ')}>
+                              {o.items.map((i: any) => i.name).join(', ')}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className="text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                                {translatePaymentMethod(o.payment_method || o.payment_status || 'dinheiro')}
+                              </span>
+                            </td>
                             <td className="px-6 py-4 text-right font-black text-gray-900">{formatCurrency(o.total_price)}</td>
+                            <td className="px-6 py-4 text-center">
+                              <button 
+                                onClick={() => handleCancelOrder(o.id)}
+                                title="Cancelar Pedido (Erro/Duplicado)"
+                                className="p-2 text-gray-300 hover:text-red-500 transition-all hover:bg-red-50 rounded-xl"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
                           </tr>
                         ))
                       )}
@@ -705,9 +853,18 @@ export const FinancePage = () => {
                                  {exp.category === 'Avulsa' ? <Activity size={14} /> : <DollarSign size={14} />}
                               </div>
                               <div>
+                                 <div className="flex items-center gap-1.5 flex-wrap">
+                                     <p className={cn("text-[10px] font-black uppercase tracking-widest", exp.category === 'Avulsa' ? "text-amber-600" : "text-gray-400")}>
+                                        {exp.category} • {new Date(exp.date || exp.created_at).toLocaleDateString()}
+                                     </p>
+                                     <span className={cn(
+                                       "text-[8px] font-black px-1.5 py-0.5 rounded-md uppercase tracking-widest",
+                                       exp.payment_method === 'mercadopago' ? "bg-blue-100 text-blue-600 border border-blue-200" : "bg-emerald-100 text-emerald-600 border border-emerald-200"
+                                     )}>
+                                       {exp.payment_method === 'mercadopago' ? 'Mercado Pago' : 'Caixa'}
+                                     </span>
+                                  </div>
                                  <p className="text-sm font-bold text-gray-800">{exp.description}</p>
-                                 <p className={cn("text-[10px] font-black uppercase tracking-widest", exp.category === 'Avulsa' ? "text-amber-600" : "text-gray-400")}>
-                                    {exp.category} • {new Date(exp.date || exp.created_at).toLocaleDateString()}</p>
                               </div>
                            </div>
                            <div className="flex items-center gap-3">
@@ -769,7 +926,8 @@ export const FinancePage = () => {
                                 name: item.name,
                                 unit: item.unit,
                                 category: (item as any).category || "Carne",
-                                initial_cost: String(item.current_avg_cost || "")
+                                initial_cost: String(item.current_avg_cost || ""),
+                                payment_method: 'cash'
                               });
                               setIsAddingNewMaterial(true);
                             }}
@@ -1110,10 +1268,10 @@ export const FinancePage = () => {
                   <tr>
                     <th className="px-6 py-4">Status</th>
                     <th className="px-6 py-4">Cliente</th>
-                    <th className="px-6 py-4">Valor Pedido</th>
-                    <th className="px-6 py-4">Insumos</th>
-                    <th className="px-6 py-4">Entrega (18%)</th>
-                    <th className="px-6 py-4">💳 Taxa MP</th>
+                    <th className="px-6 py-4">O que vendeu</th>
+                    <th className="px-6 py-4">Pagamento</th>
+                    <th className="px-6 py-4 text-center">Taxa MP</th>
+                    <th className="px-6 py-4 text-center">Taxa Entregador</th>
                     <th className="px-6 py-4 text-right">Lucro Real</th>
                   </tr>
                 </thead>
@@ -1125,25 +1283,37 @@ export const FinancePage = () => {
                           "px-3 py-1 rounded-full text-[10px] font-black uppercase",
                           o.status === 'delivered' ? "bg-green-100 text-green-700" : "bg-orange-100 text-orange-700"
                         )}>
-                          {o.status}
+                          {translateStatus(o.status)}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         <p className="font-bold text-gray-800">{o.customer_name}</p>
                         <p className="text-xs text-gray-400 font-medium">#{o.id}</p>
                       </td>
-                      <td className="px-6 py-4 font-bold text-gray-900">
-                        {formatCurrency(o.total_price)}
+                      <td className="px-6 py-4 text-xs text-gray-500 max-w-[200px]" title={o.items.map((i: any) => i.name).join(', ')}>
+                        {o.items.map((i: any) => i.name).join(', ')}
                       </td>
-                      <td className={`px-6 py-4 font-bold text-sm ${o.cmv > 0 ? 'text-red-500' : 'text-gray-300'}`}>
-                         {o.cmv > 0 ? `-${formatCurrency(o.cmv)}` : formatCurrency(0)}
-                       </td>
-                       <td className={`px-6 py-4 font-bold text-sm ${o.courierCost > 0 ? 'text-orange-500' : 'text-gray-300'}`}>
-                         {o.courierCost > 0 ? `-${formatCurrency(o.courierCost)}` : formatCurrency(0)}
-                       </td>
-                       <td className={`px-6 py-4 font-bold text-sm ${o.mpFee > 0 ? 'text-blue-500' : 'text-gray-300'}`}>
-                         {o.mpFee > 0 ? `-${formatCurrency(o.mpFee)}` : formatCurrency(0)}
-                       </td>
+                      <td className="px-6 py-4">
+                         <span className="text-[10px] font-black uppercase text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                           {translatePaymentMethod(o.payment_method || o.payment_status || 'dinheiro')}
+                         </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={cn(
+                          "text-[10px] font-bold",
+                          o.mpFee > 0 ? "text-blue-500" : "text-gray-300"
+                        )}>
+                          {o.mpFee > 0 ? `-${formatCurrency(o.mpFee)}` : '—'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={cn(
+                          "text-[10px] font-bold",
+                          o.courierCost > 0 ? "text-orange-500" : "text-gray-300"
+                        )}>
+                          {o.courierCost > 0 ? `-${formatCurrency(o.courierCost)}` : '—'}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 text-right">
                         <span className={cn(
                           "font-black text-lg",
@@ -1156,7 +1326,7 @@ export const FinancePage = () => {
                   ))}
                   {reportData.orders.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-gray-400 font-bold">
+                      <td colSpan={10} className="px-6 py-12 text-center text-gray-400 font-bold">
                         Nenhum pedido encontrado para esta data.
                       </td>
                     </tr>
@@ -1304,16 +1474,47 @@ export const FinancePage = () => {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-black text-gray-400 uppercase mb-2 tracking-widest">Custo Médio Inicial (R$)</label>
-                  <input 
-                    type="number"
-                    step="0.001"
-                    placeholder="0.00"
-                    value={newMaterial.initial_cost}
-                    onChange={(e) => setNewMaterial(p => ({ ...p, initial_cost: e.target.value }))}
-                    className="w-full px-6 py-4 bg-gray-50 border border-gray-100 rounded-2xl font-bold outline-none focus:border-orange-500"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                      <DollarSign size={10} className="text-emerald-500" /> Custo Inicial (R$)
+                    </label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={newMaterial.initial_cost} 
+                      onChange={e => setNewMaterial({...newMaterial, initial_cost: e.target.value})} 
+                      className="w-full px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl font-bold text-sm" 
+                      placeholder="0.00"
+                    />
+                  </div>
+                  {!editingMaterialId && (
+                    <div className="col-span-2 sm:col-span-1">
+                      <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Pagamento</label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button 
+                          type="button" 
+                          onClick={() => setNewMaterial({...newMaterial, payment_method: 'cash'})}
+                          className={cn(
+                            "py-2.5 rounded-lg font-bold text-[10px] flex items-center justify-center gap-1 transition-all",
+                            newMaterial.payment_method === 'cash' ? "bg-emerald-600 text-white shadow-md" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                          )}
+                        >
+                          Dinheiro
+                        </button>
+                        <button 
+                          type="button" 
+                          onClick={() => setNewMaterial({...newMaterial, payment_method: 'mercadopago'})}
+                          className={cn(
+                            "py-2.5 rounded-lg font-bold text-[10px] flex items-center justify-center gap-1 transition-all",
+                            newMaterial.payment_method === 'mercadopago' ? "bg-blue-600 text-white shadow-md" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                          )}
+                        >
+                          MP
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <button 
@@ -1396,6 +1597,33 @@ export const FinancePage = () => {
                   </div>
                 </div>
 
+                {/* Purchase Payment Method Selector */}
+                <div className="space-y-2">
+                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Origem do Dinheiro</label>
+                   <div className="grid grid-cols-2 gap-2">
+                     <button 
+                       type="button" 
+                       onClick={() => setPurchasePaymentMethod('cash')}
+                       className={cn(
+                         "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                         purchasePaymentMethod === 'cash' ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                       )}
+                     >
+                       <DollarSign size={14} /> Dinheiro (Caixa)
+                     </button>
+                     <button 
+                       type="button" 
+                       onClick={() => setPurchasePaymentMethod('mercadopago')}
+                       className={cn(
+                         "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                         purchasePaymentMethod === 'mercadopago' ? "bg-blue-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                       )}
+                     >
+                       <CreditCard size={14} /> Mercado Pago
+                     </button>
+                   </div>
+                </div>
+
                 {purchasePrice && purchaseWeight && (
                   <div className="p-4 bg-orange-50 rounded-2xl border border-orange-100 text-center">
                     <p className="text-xs font-bold text-orange-600 uppercase">Custo Unitário Calculado</p>
@@ -1473,8 +1701,33 @@ export const FinancePage = () => {
                     <option value="Fixo">Fixo (Aluguel, Luz...)</option>
                     <option value="Variável">Variável</option>
                     <option value="Vale">Vale funcionário</option>
-                    <option value="Outros">Outros</option>
                   </select>
+                </div>
+
+                <div className="space-y-2">
+                   <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Origem do Dinheiro</label>
+                   <div className="grid grid-cols-2 gap-2">
+                     <button 
+                       type="button" 
+                       onClick={() => setNewExpense(p => ({ ...p, payment_method: 'cash' }))}
+                       className={cn(
+                         "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                         newExpense.payment_method === 'cash' ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                       )}
+                     >
+                       <DollarSign size={14} /> Dinheiro (Caixa)
+                     </button>
+                     <button 
+                       type="button" 
+                       onClick={() => setNewExpense(p => ({ ...p, payment_method: 'mercadopago' }))}
+                       className={cn(
+                         "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                         newExpense.payment_method === 'mercadopago' ? "bg-blue-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                       )}
+                     >
+                       <CreditCard size={14} /> Mercado Pago
+                     </button>
+                   </div>
                 </div>
                 <button 
                   onClick={handleAddExpense}
@@ -1482,6 +1735,171 @@ export const FinancePage = () => {
                 >
                   Salvar Despesa
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      {/* MODAL CONFERÊNCIA DE CAIXA */}
+      <AnimatePresence>
+        {isConferenciaOpen && (
+          <div className="fixed inset-0 z-[140] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-4xl rounded-[3rem] p-8 md:p-10 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="flex justify-between items-center mb-8 border-b border-gray-100 pb-6 shrink-0">
+                <div>
+                  <h3 className="text-3xl font-black text-gray-900 flex items-center gap-3">
+                    <Calculator className="text-green-600" size={32} /> Conferência de Caixa
+                  </h3>
+                  <div className="flex items-center gap-3 mt-2">
+                    <span className="text-gray-400 font-bold text-[10px] uppercase tracking-widest italic shrink-0">Caixa de:</span>
+                    <input 
+                      type="date"
+                      value={selectedReportDate}
+                      aria-label="Selecionar data para conferência"
+                      onChange={(e) => setSelectedReportDate(e.target.value)}
+                      className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-1.5 text-xs font-black text-gray-700 focus:border-green-500 outline-none transition-all shadow-sm"
+                    />
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsConferenciaOpen(false)} 
+                  className="p-3 hover:bg-gray-100 rounded-full transition-colors"
+                  aria-label="Fechar modal de conferência"
+                >
+                  <X size={28} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-8">
+                {/* Métricas Principais */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-orange-50 p-5 rounded-3xl border-2 border-orange-100 shadow-sm">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="bg-orange-600 text-white p-1.5 rounded-lg"><DollarSign size={16} /></div>
+                      <span className="text-[9px] font-black uppercase text-orange-600 tracking-widest">Dinheiro</span>
+                    </div>
+                    <p className="text-2xl font-black text-orange-900">{formatCurrency(conferenciaMetrics.cashTotal)}</p>
+                    <p className="text-[9px] font-bold text-orange-400 uppercase">Físico</p>
+                  </div>
+
+                  <div className="bg-green-50 p-5 rounded-3xl border-2 border-green-100 shadow-sm relative overflow-hidden">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="bg-green-600 text-white p-1.5 rounded-lg"><QrCode size={16} /></div>
+                      <span className="text-[9px] font-black uppercase text-green-600 tracking-widest">PIX (Sistema)</span>
+                    </div>
+                    <p className="text-2xl font-black text-green-900">{formatCurrency(conferenciaMetrics.pixAutoTotal)}</p>
+                    <p className="text-[9px] font-bold text-green-400 uppercase">Mercado Pago</p>
+                    <Shield className="absolute -bottom-2 -right-2 text-green-100 rotate-12" size={60} />
+                  </div>
+
+                  <div className="bg-blue-50 p-5 rounded-3xl border-2 border-blue-100 shadow-sm">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="bg-blue-600 text-white p-1.5 rounded-lg"><Truck size={16} /></div>
+                      <span className="text-[9px] font-black uppercase text-blue-600 tracking-widest">PIX (Entregador)</span>
+                    </div>
+                    <p className="text-2xl font-black text-blue-900">{formatCurrency(conferenciaMetrics.pixDeliveryTotal)}</p>
+                    <p className="text-[9px] font-bold text-blue-400 uppercase">Manual / Entrega</p>
+                  </div>
+
+                  <div className="bg-purple-50 p-5 rounded-3xl border-2 border-purple-100 shadow-sm">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="bg-purple-600 text-white p-1.5 rounded-lg"><CreditCard size={16} /></div>
+                      <span className="text-[9px] font-black uppercase text-purple-600 tracking-widest">Outros</span>
+                    </div>
+                    <p className="text-2xl font-black text-purple-900">{formatCurrency(conferenciaMetrics.otherTotal)}</p>
+                    <p className="text-[9px] font-bold text-purple-400 uppercase">Cartões / Diversos</p>
+                  </div>
+                </div>
+
+                {/* Lista de Pedidos para Conferência */}
+                <div className="space-y-4">
+                  <h4 className="text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-4 flex items-center gap-2">
+                    <Activity size={14} /> Detalhamento de Vendas
+                  </h4>
+                  
+                  <div className="overflow-hidden rounded-[2rem] border border-gray-100 shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-gray-50/50">
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Pedido</th>
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Cliente</th>
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest">Método</th>
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest text-right">Valor</th>
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest text-center">Status MP</th>
+                          <th className="px-6 py-4 text-[10px] font-black uppercase text-gray-400 tracking-widest text-center">Ação</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {conferenciaMetrics.orders.map(o => (
+                          <tr key={o.id} className="hover:bg-gray-50/80 transition-colors group">
+                            <td className="px-6 py-4">
+                              <span className="text-xs font-black text-gray-500 group-hover:text-orange-600 transition-colors">#{o.id}</span>
+                            </td>
+                            <td className="px-6 py-4">
+                              <p className="text-xs font-bold text-gray-700">{o.customer_name}</p>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={cn(
+                                "text-[9px] font-black px-2.5 py-1 rounded-lg uppercase tracking-tighter",
+                                o.payment_method?.includes('cash') ? "bg-orange-100 text-orange-600" :
+                                o.payment_method === 'pix' ? "bg-green-100 text-green-600" :
+                                "bg-blue-100 text-blue-600"
+                              )}>
+                                {translatePaymentMethod(o.payment_method || 'pix')}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                              <span className="text-xs font-black text-gray-900">{formatCurrency(o.total_price)}</span>
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              {o.isConfirmedMP ? (
+                                <div className="flex flex-col items-center gap-1">
+                                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-100 rounded-full border border-green-200">
+                                     <Shield size={10} className="text-green-600" />
+                                     <span className="text-[8px] font-black text-green-700 uppercase tracking-widest">Garantido MP</span>
+                                     <CheckCircle size={10} className="text-green-600" />
+                                  </div>
+                                  <code className="text-[11px] font-black text-blue-700 bg-blue-50/50 border border-blue-100 px-3 py-1 rounded-lg select-all cursor-pointer hover:bg-blue-100/50 transition-all shadow-sm" title="Clique para copiar ID para o Mercado Pago">
+                                    MP ID: {o.mp_payment_id}
+                                  </code>
+                                </div>
+                              ) : (
+                                <span className="text-[8px] font-black text-gray-300 uppercase tracking-widest">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <button 
+                                onClick={() => handleCancelOrder(o.id)}
+                                title="Cancelar Pedido (Erro/Duplicado)"
+                                className="p-2 text-gray-300 hover:text-red-500 transition-all hover:bg-red-50 rounded-xl"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 pt-8 border-t border-gray-100 flex justify-between items-center shrink-0">
+                 <div>
+                   <p className="text-xs font-black text-gray-400 uppercase tracking-widest">Total Geral Bruto</p>
+                   <p className="text-4xl font-black text-gray-900">{formatCurrency(conferenciaMetrics.total)}</p>
+                 </div>
+                 <button 
+                  onClick={() => setIsConferenciaOpen(false)}
+                  className="px-10 py-5 bg-gray-900 text-white rounded-[2rem] font-black text-lg shadow-xl hover:scale-[1.02] transition-transform active:scale-95"
+                 >
+                   Conferência Finalizada
+                 </button>
               </div>
             </motion.div>
           </div>

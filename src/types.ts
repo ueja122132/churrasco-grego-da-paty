@@ -58,6 +58,7 @@ export interface Order {
   org_id?: string;
   rating?: number;
   feedback_comment?: string;
+  cash_change_requested?: number;
 }
 
 export interface Organization {

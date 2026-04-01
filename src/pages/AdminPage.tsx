@@ -25,7 +25,8 @@ import {
   RefreshCw,
   ShieldCheck,
   AlertCircle,
-  MessageSquare
+  MessageSquare,
+  CreditCard
 } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from '../lib/utils';
@@ -33,7 +34,7 @@ import { MetricsTab } from '../components/MetricsTab';
 import { Product, ExtraIngredient } from '../types';
 import FinancePage from './FinancePage';
 import { useTenant } from '../context/TenantContext';
-import { supabase } from '../supabase';
+import { supabase, socket } from '../supabase';
 
 interface AdminPageProps {
   user: any;
@@ -42,14 +43,14 @@ interface AdminPageProps {
 }
 
 const ADMIN_TABS = [
-  { id: 'metrics', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'metrics', label: 'Painel', icon: LayoutDashboard },
   { id: 'products', label: 'Produtos', icon: ShoppingBag },
   { id: 'ingredients', label: 'Ingredientes', icon: Plus },
   { id: 'finance', label: 'Financeiro', icon: DollarSign },
   { id: 'couriers', label: 'Entregadores', icon: Bike },
   { id: 'clients', label: 'Clientes', icon: UsersIcon },
   { id: 'feedbacks', label: 'Avaliações', icon: MessageSquare },
-  { id: 'faturamento', label: 'Faturamento', icon: Star },
+  { id: 'faturamento', label: 'SaaS/Planos', icon: Star },
   { id: 'settings', label: 'Configurações', icon: Settings },
 ];
 
@@ -88,9 +89,11 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
   const [newCourierCommission, setNewCourierCommission] = useState("15");
   const [newCourierEmail, setNewCourierEmail] = useState("");
   const [editingCourier, setEditingCourier] = useState<any>(null);
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [payoutPaymentMethod, setPayoutPaymentMethod] = useState<'cash' | 'mercadopago'>('cash');
+  const [advancePaymentMethod, setAdvancePaymentMethod] = useState<'cash' | 'mercadopago'>('cash');
   const [selectedCourier, setSelectedCourier] = useState<any>(null);
   const [modalType, setModalType] = useState<'advance' | 'payout' | 'delete_courier' | 'edit_commission' | null>(null);
-  const [advanceAmount, setAdvanceAmount] = useState("");
   const [editCommissionValue, setEditCommissionValue] = useState("");
 
   // Clients states
@@ -98,11 +101,30 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
 
   // Settings states
   const [logoPreview, setLogoPreview] = useState(currentOrg?.branding?.logoUrl || "");
+
+  // Real-time connection to Org Room
+  useEffect(() => {
+    if (!currentOrg?.id) return;
+    if (!socket.connected) socket.connect();
+    socket.emit("join:org", currentOrg.id);
+    
+    // Admin listens for critical updates to refresh data if needed
+    socket.on("order:new", () => {
+       // Just a refresh signal, or could update state directly if we have orders here
+       // Many admin sub-tabs fetch their own data
+    });
+
+    return () => {
+      socket.off("order:new");
+    };
+  }, [currentOrg?.id]);
   const [logoSaving, setLogoSaving] = useState(false);
   const [loginImageUrl, setLoginImageUrl] = useState(currentOrg?.login_image_url || "");
   const [loginImageSaving, setLoginImageSaving] = useState(false);
-  const [mpToken, setMpToken] = useState(""); 
+  const [mpToken, setMpToken] = useState(currentOrg?.mp_access_token || "");
   const [mpSaving, setMpSaving] = useState(false);
+  const [acceptsCashChange, setAcceptsCashChange] = useState(currentOrg?.accepts_cash_change ?? true);
+  const [cashSettingsSaving, setCashSettingsSaving] = useState(false);
   const [mpSaved, setMpSaved] = useState(false);
   const [operatingHours, setOperatingHours] = useState<any>(currentOrg?.operating_hours || {});
   const [hoursSaving, setHoursSaving] = useState(false);
@@ -139,6 +161,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
              setLogoPreview(data.branding?.logoUrl || "");
              setOperatingHours(data.operating_hours || {});
              setSelectedPlanId(data.plan_id || 'free');
+             setAcceptsCashChange(data.accepts_cash_change ?? true);
            }
            setLocalLoading(false);
          })
@@ -150,6 +173,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
        setCurrentOrg(org);
        setOperatingHours(org?.operating_hours || {});
        setSelectedPlanId(org?.plan_id || org?.plan || 'free');
+       setAcceptsCashChange(org?.accepts_cash_change ?? true);
        if (org?.has_mp_token || org?.mp_access_token) setMpToken("********");
        setLocalLoading(false);
     }
@@ -455,8 +479,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
         body: JSON.stringify({ amount: parseFloat(advanceAmount) })
       });
       if (res.ok) {
+        // AUTOMATIC EXPENSE FOR ADVANCE
+        const courierName = selectedCourier?.name || "Entregador";
+        await supabase.from('expenses').insert([{
+          description: `Vale: ${courierName}`,
+          amount: parseFloat(advanceAmount),
+          category: 'Adiantamento',
+          payment_method: advancePaymentMethod,
+          date: new Date().toISOString(),
+          org_id: currentOrg?.id,
+          settled: true
+        }]);
+
         notify("Vale registrado!", "success");
         setAdvanceAmount("");
+        setAdvancePaymentMethod('cash');
         setModalType(null);
         fetchData();
       }
@@ -474,12 +511,50 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
         body: JSON.stringify({ org_id: currentOrg?.id })
       });
       if (res.ok) {
+        // AUTOMATIC EXPENSE FOR PAYOUT
+        const courierName = selectedCourier?.name || "Entregador";
+        const netPay = courierStats[selectedCourier.id]?.net_pay || 0;
+        
+        if (netPay > 0) {
+          await supabase.from('expenses').insert([{
+            description: `Pagamento Comissão: ${courierName}`,
+            amount: netPay,
+            category: 'Comissão (Resgate)',
+            payment_method: payoutPaymentMethod,
+            date: new Date().toISOString(),
+            org_id: currentOrg?.id,
+            settled: true
+          }]);
+        }
+
         notify("Pagamento realizado!", "success");
+        setPayoutPaymentMethod('cash');
         setModalType(null);
         fetchData();
       }
     } catch (err) {
       notify("Erro ao processar pagamento", "error");
+    }
+  };
+
+  const saveCashSettings = async (val: boolean) => {
+    setCashSettingsSaving(true);
+    try {
+      const res = await fetch(`/api/organizations/${currentOrg?.id}/cash-settings`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accepts_cash_change: val })
+      });
+      
+      if (!res.ok) throw new Error("Falha ao salvar no servidor");
+      
+      setAcceptsCashChange(val);
+      notify("Configuração de troco atualizada!", "success");
+      refreshTenant();
+    } catch (err: any) {
+      notify("Erro ao salvar configuração: " + err.message, "error");
+    } finally {
+      setCashSettingsSaving(false);
     }
   };
 
@@ -665,7 +740,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
         })}
       </div>
 
-      {activeTab === 'metrics' && <MetricsTab orgId={currentOrg?.id} />}
+      {activeTab === 'metrics' && <MetricsTab orgId={currentOrg?.id} adminId={user?.id} />}
 
       {activeTab === 'products' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -1281,6 +1356,29 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
            </div>
 
            <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-xl font-bold flex items-center gap-2"><DollarSign className="text-green-500" /> Troco para Dinheiro</h2>
+                  <p className="text-gray-500 text-sm mt-1">Permitir que o cliente peça troco para pagamentos em dinheiro na entrega.</p>
+                </div>
+                <button
+                  onClick={() => saveCashSettings(!acceptsCashChange)}
+                  disabled={cashSettingsSaving}
+                  title={acceptsCashChange ? "Desativar Troco" : "Ativar Troco"}
+                  className={cn(
+                    "relative w-14 h-8 rounded-full transition-colors",
+                    acceptsCashChange ? "bg-green-600" : "bg-gray-300"
+                  )}
+                >
+                  <div className={cn(
+                    "absolute top-1 left-1 w-6 h-6 bg-white rounded-full transition-transform shadow-sm",
+                    acceptsCashChange ? "translate-x-6" : "translate-x-0"
+                  )} />
+                </button>
+              </div>
+           </div>
+
+           <div className="bg-white p-8 rounded-3xl border border-gray-200 shadow-lg">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold flex items-center gap-2"><Clock className="text-orange-500" /> Horário de Funcionamento</h2>
                 <button onClick={saveHours} disabled={hoursSaving} className="bg-orange-600 text-white px-6 py-2 rounded-xl font-bold hover:bg-orange-700">
@@ -1334,15 +1432,72 @@ export const AdminPage: React.FC<AdminPageProps> = ({ user, org, notify }) => {
                 </div>
                 
                 {modalType === 'advance' && (
-                  <div className="space-y-4">
-                    <input type="number" step="0.01" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} className="w-full px-4 py-4 bg-gray-50 border rounded-2xl font-black text-2xl text-center" placeholder="0.00" />
+                  <div className="space-y-6">
+                    <div>
+                      <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest text-center mb-2">Valor do Vale</label>
+                      <input type="number" step="0.01" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} className="w-full px-4 py-4 bg-gray-50 border rounded-2xl font-black text-2xl text-center" placeholder="0.00" />
+                    </div>
+
+                    <div className="space-y-2">
+                       <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest text-center">Sair de onde?</label>
+                       <div className="grid grid-cols-2 gap-2">
+                         <button 
+                           type="button" 
+                           onClick={() => setAdvancePaymentMethod('cash')}
+                           className={cn(
+                             "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                             advancePaymentMethod === 'cash' ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                           )}
+                         >
+                           <DollarSign size={14} /> Dinheiro
+                         </button>
+                         <button 
+                           type="button" 
+                           onClick={() => setAdvancePaymentMethod('mercadopago')}
+                           className={cn(
+                             "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                             advancePaymentMethod === 'mercadopago' ? "bg-blue-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                           )}
+                         >
+                           <CreditCard size={14} /> Mercado Pago
+                         </button>
+                       </div>
+                    </div>
+
                     <button onClick={handleGiveAdvance} className="w-full py-4 bg-orange-600 text-white rounded-2xl font-black shadow-lg">Confirmar Vale</button>
                   </div>
                 )}
                 
                 {modalType === 'payout' && (
-                  <div className="space-y-4 text-center">
-                    <p className="text-gray-500 mb-6">Deseja liquidar todas as comissões e vales deste entregador?</p>
+                  <div className="space-y-6">
+                    <p className="text-gray-500 text-center text-sm">Deseja liquidar todas as comissões e vales deste entregador?</p>
+                    
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">Origem do Pagamento</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button 
+                          type="button" 
+                          onClick={() => setPayoutPaymentMethod('cash')}
+                          className={cn(
+                            "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                            payoutPaymentMethod === 'cash' ? "bg-emerald-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                          )}
+                        >
+                          <DollarSign size={14} /> Dinheiro
+                        </button>
+                        <button 
+                          type="button" 
+                          onClick={() => setPayoutPaymentMethod('mercadopago')}
+                          className={cn(
+                            "py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all",
+                            payoutPaymentMethod === 'mercadopago' ? "bg-blue-600 text-white shadow-lg" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
+                          )}
+                        >
+                          <CreditCard size={14} /> Mercado Pago
+                        </button>
+                      </div>
+                    </div>
+
                     <button onClick={handlePayout} className="w-full py-4 bg-green-600 text-white rounded-2xl font-black shadow-lg">Confirmar Pagamento</button>
                   </div>
                 )}

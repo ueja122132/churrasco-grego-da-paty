@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { adminService, SaaSMetrics as RealMetrics } from '../services/adminService';
 import { cn } from '../../../lib/utils';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 
 export const OverviewView: React.FC = () => {
   const [metrics, setMetrics] = useState<RealMetrics | null>(null);
@@ -38,22 +38,23 @@ export const OverviewView: React.FC = () => {
   const [isWebhookModalOpen, setIsWebhookModalOpen] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("https://seu-dominio.com/api/webhooks/mercadopago");
 
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true);
-      try {
-        const [metricsData, companiesData] = await Promise.all([
-          adminService.getMetrics(period),
-          adminService.getCompanies()
-        ]);
-        setMetrics(metricsData);
-        setCompanies(companiesData);
-      } catch (err) {
-        console.error("Erro ao carregar métricas:", err);
-      } finally {
-        setLoading(false);
-      }
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [metricsData, companiesData] = await Promise.all([
+        adminService.getMetrics(period),
+        adminService.getCompanies()
+      ]);
+      setMetrics(metricsData);
+      setCompanies(companiesData);
+    } catch (err) {
+      console.error("Erro ao carregar métricas:", err);
+    } finally {
+      setLoading(false);
     }
+  };
+
+  useEffect(() => {
     loadData();
   }, [period]);
 
@@ -61,15 +62,16 @@ export const OverviewView: React.FC = () => {
     { label: 'Total de Lojas', value: metrics?.totalCompanies || 0, change: '+12%', trend: 'up', icon: Store, bg: 'bg-indigo-50 dark:bg-indigo-900/30', color: 'text-indigo-600 dark:text-indigo-400' },
     { label: 'Lojas Ativas', value: metrics?.activeCompanies || 0, change: '+5%', trend: 'up', icon: Zap, bg: 'bg-emerald-50 dark:bg-emerald-900/30', color: 'text-emerald-600 dark:text-emerald-400' },
     { label: 'Volume Período', value: `R$ ${(metrics?.mrr || 0).toLocaleString('pt-BR')}`, change: '+18%', trend: 'up', icon: CreditCard, bg: 'bg-amber-50 dark:bg-amber-900/30', color: 'text-amber-600 dark:text-amber-400' },
-    { label: 'Projeção (ARR)', value: `R$ ${(metrics?.arr || 0).toLocaleString('pt-BR')}`, change: '+15%', trend: 'up', icon: Target, bg: 'bg-purple-50 dark:bg-purple-900/30', color: 'text-purple-600 dark:text-purple-400' },
+    { label: 'Estimativa (ARR)', value: `R$ ${(metrics?.arr || 0).toLocaleString('pt-BR')}`, change: '+15%', trend: 'up', icon: Target, bg: 'bg-purple-50 dark:bg-purple-900/30', color: 'text-purple-600 dark:text-purple-400' },
     { label: `Novas (${period})`, value: metrics?.newSignups || 0, change: '+2', trend: 'up', icon: Users, bg: 'bg-blue-50 dark:bg-blue-900/30', color: 'text-blue-600 dark:text-blue-400' },
-    { label: 'Churn Rate', value: `${metrics?.churnRate || 0}%`, change: '-0.5%', trend: 'down', icon: Activity, bg: 'bg-rose-50 dark:bg-rose-900/30', color: 'text-rose-600 dark:text-rose-400' },
+    { label: 'Cancelamentos', value: `${metrics?.churnRate || 0}%`, change: '-0.5%', trend: 'down', icon: Activity, bg: 'bg-rose-50 dark:bg-rose-900/30', color: 'text-rose-600 dark:text-rose-400' },
   ];
 
   const handleSuspend = async () => {
     if (confirm("Deseja realmente suspender todas as empresas inadimplentes?")) {
       const res = await adminService.suspendOverdueCompanies();
       alert(res.message);
+      loadData(); // Recarrega para refletir as suspensões
     }
   };
 
@@ -255,7 +257,7 @@ export const OverviewView: React.FC = () => {
                 <div className="flex gap-4">
                   <div className="flex items-center gap-1.5">
                     <div className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-                    <span className="text-[10px] font-black uppercase text-slate-400">Stores</span>
+                    <span className="text-[10px] font-black uppercase text-slate-400">Lojas</span>
                   </div>
                 </div>
               </div>

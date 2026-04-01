@@ -14,6 +14,7 @@ import { useTenant } from "../context/TenantContext";
 import { useNotification } from "../context/NotificationContext";
 import { supabase } from "../supabase";
 import { cn } from "../lib/utils";
+import { SUPER_ADMIN_EMAIL } from '../App';
 
 export const LoginPage = () => {
   const { org } = useTenant();
@@ -68,8 +69,8 @@ export const LoginPage = () => {
         finalRole = (customUser as any).role || 'user';
       }
       
-      // Navegação Inteligente Baseada na Role
-      if (finalRole === 'super_admin') {
+      // Navegação Inteligente Baseada na Role e E-mail
+      if (finalRole === 'super_admin' && email === SUPER_ADMIN_EMAIL) {
         navigate('/saas');
       } else if (finalRole === 'courier') {
         navigate('/courier');
