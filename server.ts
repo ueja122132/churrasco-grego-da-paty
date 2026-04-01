@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import { createClient } from "@supabase/supabase-js";
 import path, { resolve, dirname } from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenerativeAI } from "@google/generative-ai";
@@ -69,6 +70,37 @@ function invalidateOrgCache(orgId: string) {
        apiCache.delete(key);
     }
   }
+}
+
+async function detectOrganization(host: string, slug?: string, orgId?: string) {
+  const cacheKey = `detect:${host}-${slug}-${orgId}`;
+  const cached = getCachedData(cacheKey);
+  if (cached) return cached;
+
+  let data = null;
+  try {
+    if (orgId && orgId !== 'undefined' && orgId !== 'null') {
+      const { data: idData } = await supabaseAdmin.from('organizations').select('*').eq('id', orgId).maybeSingle();
+      data = idData;
+    }
+    if (!data && host && !host.includes('localhost') && host !== '127.0.0.1') {
+      const { data: domData } = await supabaseAdmin.from('organizations').select('*').eq('custom_domain', host).maybeSingle();
+      data = domData;
+    }
+    if (!data && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host?.includes('localhost'))) {
+      const { data: slugData } = await supabaseAdmin.from('organizations').select('*').eq('slug', 'paty-churrasco').maybeSingle();
+      data = slugData;
+    }
+    if (!data && slug) {
+      const { data: slugData } = await supabaseAdmin.from('organizations').select('*').eq('slug', slug).maybeSingle();
+      data = slugData;
+    }
+  } catch (err) {
+    console.error("[DETECT-ORG] Error:", err);
+  }
+
+  if (data) setCachedData(cacheKey, data);
+  return data;
 }
 
 // Password Hashing Utility
@@ -147,18 +179,12 @@ async function startServer() {
   // ==========================================
   app.get("/logo.png", async (req, res) => {
     try {
-      // Optimize: Only fetch orgs that HAVE a branding logo
-      const { data: orgWithLogo, error } = await supabase
-        .from('organizations')
-        .select('branding, name')
-        .not('branding', 'is', null)
-        .limit(1)
-        .single();
-
-      if (orgWithLogo && orgWithLogo.branding) {
-        const logoUrl = orgWithLogo.branding.logoUrl || orgWithLogo.branding.logo || orgWithLogo.branding.logo_url;
+      const host = req.hostname;
+      const org = await detectOrganization(host);
+      
+      if (org && org.branding) {
+        const logoUrl = org.branding.logoUrl || org.branding.logo || org.branding.logo_url;
         if (logoUrl) {
-          console.log(`[LOGO] Found logo in org: ${orgWithLogo.name}`);
           if (logoUrl.startsWith('data:image')) {
             const [meta, base64Data] = logoUrl.split(',');
             const mime = meta.match(/:(.*?);/)?.[1] || 'image/png';
@@ -170,9 +196,14 @@ async function startServer() {
         }
       }
 
-      // Final stable fallback
-      const PUBLIC_FALLBACK = "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=500&auto=format&fit=crop&q=60";
-      console.warn("[LOGO] No logo found, using public fallback");
+      const fallbackPath = path.join(process.cwd(), "public", "logo.png");
+      if (fs.existsSync(fallbackPath)) {
+        return res.sendFile(fallbackPath, {
+          headers: { 'Cache-Control': 'public, max-age=86400' }
+        });
+      }
+
+      const PUBLIC_FALLBACK = "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?w=1200&h=630&fit=crop&q=80&auto=format";
       res.redirect(PUBLIC_FALLBACK);
     } catch (err: any) {
       console.error("[LOGO] Fatal error:", err.message);
@@ -186,47 +217,13 @@ async function startServer() {
     const host = req.query.host as string || req.hostname;
     const fallbackSlug = req.query.slug as string;
     const orgId = req.query.orgId as string;
-    const cacheKey = `detect:${host}-${fallbackSlug}-${orgId}`;
-
-    // Check Cache
-    const cached = getCachedData(cacheKey);
-    if (cached) return res.json(cached);
-
-    console.log(`[BACKEND] Detecting org for host: ${host}, fallback: ${fallbackSlug}`);
 
     try {
-      // Execution in parallel or sequential if needed, but optimized
-      let data = null;
-
-      if (orgId) {
-        const { data: idData } = await supabase.from('organizations').select('*').eq('id', orgId).maybeSingle();
-        data = idData;
-      }
-
-      if (!data && host) {
-        const { data: domData } = await supabase.from('organizations').select('*').eq('custom_domain', host).maybeSingle();
-        data = domData;
-      }
-
-      // Localhost Fallback for Ajeu's Dev Environment
-      if (!data && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '::ffff:127.0.0.1')) {
-        console.log("[BACKEND] Localhost detected (", host, "), falling back to 'paty-churrasco' for dev experience");
-        const { data: slugData } = await supabase.from('organizations').select('*').eq('slug', 'paty-churrasco').maybeSingle();
-        data = slugData;
-      }
-
-      if (!data && fallbackSlug) {
-        const { data: slugData } = await supabase.from('organizations').select('*').eq('slug', fallbackSlug).maybeSingle();
-        data = slugData;
-      }
-
+      const data = await detectOrganization(host, fallbackSlug, orgId);
       if (!data) return res.status(404).json({ error: "Organização não encontrada" });
 
       const sanitizedData = { ...data, has_mp_token: !!data.mp_access_token };
       delete sanitizedData.mp_access_token;
-      
-      // Update Cache
-      setCachedData(cacheKey, sanitizedData);
       res.json(sanitizedData);
     } catch (err: any) {
       res.status(500).json({ error: "Erro interno" });
@@ -1342,7 +1339,14 @@ async function startServer() {
         success: true,
         subscription_id: data?.id,
         message: 'Solicite o PIX via WhatsApp para ativar sua conta.',
-        whatsapp: 'https://wa.me/5511999999999?text=Quero+contratar+o+plano+' + plan.name
+        whatsapp: 'https://wa.me/5511999999999?text=' + encodeURIComponent(
+          `Quero contratar o plano ${plan.name}.
+Nome: ${name}
+E-mail: ${email}
+Telefone: ${phone || 'Não informado'}
+Loja: ${store_name}
+Slug: ${store_slug}`
+        )
       });
     }
 
@@ -3371,10 +3375,40 @@ Diretrizes:
       immutable: true,
       index: false
     }));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"), {
-        headers: { 'Cache-Control': 'no-cache' } // HTML always fresh
-      });
+    app.get("*", async (req, res) => {
+      const distIndex = path.join(distPath, "index.html");
+      if (!fs.existsSync(distIndex)) return res.status(404).send("App not built yet.");
+
+      try {
+        let html = fs.readFileSync(distIndex, 'utf8');
+        
+        // Dynamic SEO / Social Sharing Injection
+        const host = req.hostname;
+        const org = await detectOrganization(host);
+
+        if (org) {
+          const siteName = org.name || "Churrasco Grego da Paty";
+          const siteDesc = org.description || "O melhor sabor da região no seu celular. Peça agora!";
+          const logoUrl = org.branding?.logoUrl || org.branding?.logo || `https://${host}/logo.png?v=5`;
+          
+          html = html
+            .replace(/<title>.*?<\/title>/g, `<title>${siteName}</title>`)
+            .replace(/<meta name="title" content=".*?" ?\/?>/g, `<meta name="title" content="${siteName}" />`)
+            .replace(/<meta name="description" content=".*?" ?\/?>/g, `<meta name="description" content="${siteDesc}" />`)
+            .replace(/<meta property="og:title" content=".*?" ?\/?>/g, `<meta property="og:title" content="${siteName}" />`)
+            .replace(/<meta property="og:description" content=".*?" ?\/?>/g, `<meta property="og:description" content="${siteDesc}" />`)
+            .replace(/<meta property="og:image" content=".*?" ?\/?>/g, `<meta property="og:image" content="${logoUrl}" />`)
+            .replace(/<meta property="og:url" content=".*?" ?\/?>/g, `<meta property="og:url" content="https://${host}${req.url}" />`)
+            .replace(/<meta property="twitter:title" content=".*?" ?\/?>/g, `<meta property="twitter:title" content="${siteName}" />`)
+            .replace(/<meta property="twitter:description" content=".*?" ?\/?>/g, `<meta property="twitter:description" content="${siteDesc}" />`)
+            .replace(/<meta property="twitter:image" content=".*?" ?\/?>/g, `<meta property="twitter:image" content="${logoUrl}" />`);
+        }
+
+        res.send(html);
+      } catch (err) {
+        console.error("[INDEX-SERVE] Error injecting meta tags:", err);
+        res.sendFile(distIndex);
+      }
     });
   }
 
